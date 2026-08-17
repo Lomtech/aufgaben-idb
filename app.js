@@ -275,6 +275,7 @@ let aktiv = null;            // { id, k } – aktive Zelle
 let bearbeitet = false;      // aktive Zelle im Bearbeitungsmodus
 let markiert = new Set();    // markierte Zeilen (id)
 let letzteZeile = null;      // für Umschalt-Klick
+let startWert = null;        // beim Lostippen: Anfangsinhalt des Felds, noch nicht im Modell
 
 const SORTWERT = {
   ord:     t => t.ord ?? t.created,
