@@ -36,6 +36,10 @@
       </form>
 
       <div class="bar">
+        <div class="tabs" role="group" aria-label="Ansicht">
+          <button type="button" data-view="tabelle" class="on">Tabelle</button>
+          <button type="button" data-view="brett">Brett</button>
+        </div>
         <input id="q" type="search" placeholder="Suchen" autocomplete="off" aria-label="Aufgaben suchen">
         <select id="projfilter" aria-label="Nach Projekt filtern" title="Projekt"></select>
         <select id="sort" aria-label="Sortierung" title="Sortierung">
@@ -50,6 +54,7 @@
       </div>
 
       <div class="board" id="board"></div>
+      <div class="gridwrap" id="gridwrap"><table class="grid" id="grid"></table></div>
       <p id="empty" hidden></p>
     </section>
 
