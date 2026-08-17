@@ -458,7 +458,8 @@ function markEmpty() {
 function countWords() {
   const woerter = (editor.innerText || '').trim().split(/\s+/).filter(Boolean).length;
   const bilder = editor.querySelectorAll('img').length;
-  $('#words').textContent = `${woerter} Wörter` + (bilder ? ` · ${bilder} Bild${bilder > 1 ? 'er' : ''}` : '');
+  $('#words').textContent = `${woerter} ${woerter === 1 ? 'Wort' : 'Wörter'}`
+    + (bilder ? ` · ${bilder} Bild${bilder > 1 ? 'er' : ''}` : '');
 }
 
 /* --- Formatierung --------------------------------------------------------- */
@@ -565,11 +566,38 @@ editor.addEventListener('drop', async e => {
   for (const f of bilder) await insertImage(f);
 });
 
+/* Steht der Cursor am Ende dieses Blocks? */
+function atEnd(block) {
+  const sel = getSelection();
+  if (!sel.isCollapsed || !sel.anchorNode) return false;
+  const r = document.createRange();
+  r.selectNodeContents(block);
+  r.setStart(sel.anchorNode, sel.anchorOffset);
+  return r.toString().trim() === '';
+}
+
 editor.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key >= '0' && e.key <= '3') {
     e.preventDefault();
     command(e.key === '0' ? 'p' : 'h' + e.key);
     return;
+  }
+
+  if (e.key === 'Enter' && !e.shiftKey) {
+    const block = blockOf(getSelection().anchorNode)?.closest('h1,h2,h3,pre');
+    if (block && block.tagName === 'PRE') {          // im Code-Block: Zeilenumbruch statt neuem Block
+      e.preventDefault();
+      exec('insertText', '\n');
+      touch();
+      return;
+    }
+    if (block && atEnd(block)) {                     // nach einer Überschrift: normaler Absatz
+      e.preventDefault();
+      exec('insertParagraph');
+      exec('formatBlock', '<p>');
+      touch(); syncToolbar();
+      return;
+    }
   }
   if (e.key === 'Tab') {                                 // in Listen ein-/ausrücken
     const li = blockOf(getSelection().anchorNode)?.closest('li');
