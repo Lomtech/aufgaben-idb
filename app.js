@@ -18,7 +18,7 @@ const PRIO = ['ohne', 'mittel', 'hoch'];
 
 let tab = 'tasks';
 let tasks = [], docs = [];
-let filter = 'open', query = '', docQuery = '';
+let filter = 'open', query = '', docQuery = '', sort = 'smart';
 let editing = null;    // id, deren Titel gerade im Eingabefeld hängt
 let openId = null;     // id, deren Detailbereich offen ist
 let curDoc = null;     // offenes Dokument
@@ -31,12 +31,21 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>'
 const byId = id => tasks.find(t => t.id === id);
 const dueKey = t => t.due || '9999-99-99';
 
-/* erledigt nach unten, dann Priorität, dann Fälligkeit, dann neueste zuerst */
-const order = (a, b) =>
-  (a.done - b.done) ||
-  (b.prio - a.prio) ||
-  (dueKey(a) < dueKey(b) ? -1 : dueKey(a) > dueKey(b) ? 1 : 0) ||
-  (b.created - a.created);
+/* Sortierungen – erledigte Aufgaben stehen immer unten. */
+const nameCmp = (a, b) => a.title.localeCompare(b.title, 'de', { sensitivity: 'base', numeric: true });
+
+const SORTEN = {
+  smart:   (a, b) => (b.prio - a.prio) ||
+                     (dueKey(a) < dueKey(b) ? -1 : dueKey(a) > dueKey(b) ? 1 : 0) ||
+                     (b.created - a.created),
+  new:     (a, b) => b.created - a.created,
+  old:     (a, b) => a.created - b.created,
+  touched: (a, b) => (b.updated || b.created) - (a.updated || a.created),
+  az:      nameCmp,
+  za:      (a, b) => nameCmp(b, a),
+};
+
+const order = (a, b) => (a.done - b.done) || SORTEN[sort](a, b);
 
 /* ------------------------------------------------------------- IndexedDB --- */
 
@@ -46,11 +55,11 @@ let db;
 function openDB() {
   return new Promise((resolve, reject) => {
     let req;
-    try { req = indexedDB.open(DB_NAME, 2); }
+    try { req = indexedDB.open(DB_NAME, 3); }
     catch (e) { return reject(e); }                  // file://, Privatmodus …
     req.onupgradeneeded = () => {
       const d = req.result;
-      for (const name of ['tasks', 'docs', 'images'])
+      for (const name of ['tasks', 'docs', 'images', 'diagrams'])
         if (!d.objectStoreNames.contains(name)) d.createObjectStore(name, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
@@ -151,7 +160,11 @@ function render() {
 function updateCount() {
   const el = $('#count');
   if (tab === 'text') {
-    el.textContent = docs.length ? `${docs.length} Dokument${docs.length > 1 ? 'e' : ''}` : '';
+    el.textContent = docs.length ? pl(docs.length, 'Dokument', 'Dokumente') : '';
+    return;
+  }
+  if (tab === 'dia') {
+    el.textContent = dias.length ? pl(dias.length, 'Diagramm', 'Diagramme') : '';
     return;
   }
   const offen = tasks.reduce((n, t) => n + (t.done ? 0 : 1), 0);
@@ -740,20 +753,375 @@ docList.addEventListener('click', e => {
   else openDoc(li.dataset.id);
 });
 
+/* =========================================================== DIAGRAMME ===== */
+
+const canvas = $('#canvas'), diaTitle = $('#diatitle');
+const GRID = 10, BREITE = 1500, HOEHE = 950;
+
+let dias = [], curDia = null, auswahl = null, verbindeVon = null, verbindeModus = false, zieht = null;
+
+const TINTE = { box:'#ffffff', round:'#f2f6ff', db:'#f7f3ff', ext:'#fafbfc' };
+const knoten = id => curDia && curDia.nodes.find(n => n.id === id);
+
+/* Beschriftung auf höchstens vier Zeilen umbrechen und daraus die Größe ableiten. */
+function umbrechen(text, max = 24) {
+  const worte = String(text || '').split(/\s+/).filter(Boolean);
+  if (!worte.length) return [''];
+  const zeilen = [];
+  let z = '';
+  for (const w of worte) {
+    if (!z) z = w;
+    else if ((z + ' ' + w).length <= max) z += ' ' + w;
+    else { zeilen.push(z); z = w; }
+  }
+  zeilen.push(z);
+  return zeilen.slice(0, 4);
+}
+
+function messen(n) {
+  const zeilen = umbrechen(n.text);
+  const breit = Math.max(...zeilen.map(z => z.length));
+  n.w = Math.max(130, Math.min(290, Math.round(breit * 7.9 + 32)));
+  n.h = Math.max(48, 26 + zeilen.length * 18) + (n.shape === 'db' ? 12 : 0);
+  return zeilen;
+}
+
+/* Punkt auf dem Rand von n in Richtung (tx,ty) – dort setzt der Pfeil an. */
+function randpunkt(n, tx, ty) {
+  const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+  const dx = tx - cx, dy = ty - cy;
+  if (!dx && !dy) return [cx, cy];
+  const s = Math.min(dx ? (n.w / 2 + 4) / Math.abs(dx) : 1e9, dy ? (n.h / 2 + 4) / Math.abs(dy) : 1e9);
+  return [cx + dx * s, cy + dy * s];
+}
+
+function form(n, aktiv) {
+  const rand = aktiv ? '#2f6bff' : '#c3ccdb';
+  const dick = aktiv ? 2 : 1.4;
+  const füll = TINTE[n.shape] || '#fff';
+  if (n.shape === 'db') {
+    const r = 10;
+    return `<path d="M0 ${r} a ${n.w / 2} ${r} 0 0 1 ${n.w} 0 v ${n.h - 2 * r} a ${n.w / 2} ${r} 0 0 1 ${-n.w} 0 z" fill="${füll}" stroke="${rand}" stroke-width="${dick}"/>`
+         + `<path d="M0 ${r} a ${n.w / 2} ${r} 0 0 0 ${n.w} 0" fill="none" stroke="${rand}" stroke-width="1.1" opacity=".6"/>`;
+  }
+  const rx = n.shape === 'round' ? 15 : 4;
+  const strich = n.shape === 'ext' ? ' stroke-dasharray="6 4"' : '';
+  return `<rect width="${n.w}" height="${n.h}" rx="${rx}" fill="${füll}" stroke="${rand}" stroke-width="${dick}"${strich}/>`;
+}
+
+function inhalt(d, aktivId) {
+  const teile = [];
+
+  for (const e of d.edges) {
+    const a = d.nodes.find(n => n.id === e.from), b = d.nodes.find(n => n.id === e.to);
+    if (!a || !b) continue;
+    const [x1, y1] = randpunkt(a, b.x + b.w / 2, b.y + b.h / 2);
+    const [x2, y2] = randpunkt(b, a.x + a.w / 2, a.y + a.h / 2);
+    const aktiv = e.id === aktivId;
+    teile.push(`<line data-e="${e.id}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${aktiv ? '#2f6bff' : '#8f97a6'}" stroke-width="${aktiv ? 2.2 : 1.6}" marker-end="url(#pfeil)"${e.dashed ? ' stroke-dasharray="5 4"' : ''}/>`);
+    if (e.text) {
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, br = e.text.length * 6.6 + 12;
+      teile.push(`<rect x="${mx - br / 2}" y="${my - 9.5}" width="${br}" height="19" rx="5" fill="#fff" stroke="#e7e9ee"/>`
+               + `<text data-e="${e.id}" x="${mx}" y="${my + 4}" text-anchor="middle" font-size="11.5" fill="#767d8a">${esc(e.text)}</text>`);
+    }
+  }
+
+  for (const n of d.nodes) {
+    const zeilen = messen(n);
+    const aktiv = n.id === aktivId || n.id === verbindeVon;
+    const oben = n.h / 2 - (zeilen.length - 1) * 9 + 4 + (n.shape === 'db' ? 4 : 0);
+    const text = zeilen.map((z, i) =>
+      `<tspan x="${n.w / 2}" y="${oben + i * 18}">${esc(z)}</tspan>`).join('');
+    teile.push(`<g data-n="${n.id}" transform="translate(${n.x},${n.y})" style="cursor:move">
+      ${form(n, aktiv)}
+      <text text-anchor="middle" font-size="13" fill="#14161b"
+            font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif">${text}</text>
+    </g>`);
+  }
+  return teile.join('');
+}
+
+const PFEIL = `<defs><marker id="pfeil" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+  orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8f97a6"/></marker></defs>`;
+
+/* Fürs Einbetten: eng zugeschnitten, ohne Auswahl-Hervorhebung. */
+function svgOf(d) {
+  if (!d.nodes.length) return `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>`;
+  d.nodes.forEach(messen);
+  const rand = 16;
+  const x0 = Math.min(...d.nodes.map(n => n.x)) - rand;
+  const y0 = Math.min(...d.nodes.map(n => n.y)) - rand;
+  const x1 = Math.max(...d.nodes.map(n => n.x + n.w)) + rand;
+  const y1 = Math.max(...d.nodes.map(n => n.y + n.h)) + rand;
+  const w = Math.round(x1 - x0), h = Math.round(y1 - y0);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${x0} ${y0} ${w} ${h}">`
+       + `${PFEIL}<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#fff"/>${inhalt(d, null)}</svg>`;
+}
+
+function renderDia() {
+  if (!curDia) { canvas.innerHTML = ''; return; }
+  canvas.innerHTML = `<svg width="${BREITE}" height="${HOEHE}" viewBox="0 0 ${BREITE} ${HOEHE}">${PFEIL}${inhalt(curDia, auswahl)}</svg>`;
+  $('#dia-connect').classList.toggle('on', verbindeModus);
+}
+
+function renderDiaList() {
+  const listeEl = $('#dialist');
+  listeEl.innerHTML = [...dias].sort((a, b) => b.updated - a.updated).map(d =>
+    `<li data-id="${d.id}" class="${curDia && d.id === curDia.id ? 'on' : ''}">
+      <span class="dbox"><span class="dt">${esc(d.title || 'Ohne Titel')}</span>
+      <span class="dd">${d.nodes.length} Elemente · ${fmtStamp(d.updated)}</span></span>
+      <button type="button" class="ddel" title="Diagramm löschen" aria-label="Diagramm löschen">×</button>
+    </li>`).join('');
+  $('#diaeditor').hidden = !curDia;
+  $('#nodias').hidden = !!curDia;
+  updateCount();
+}
+
+function saveDia(delay = 250) {
+  if (!curDia) return;
+  const d = curDia;
+  d.title = diaTitle.value;
+  d.updated = Date.now();
+  $('#diasaved').textContent = '…';
+  later('dia', delay, () => tx('diagrams', s => s.put(d))
+    .then(() => { $('#diasaved').textContent = 'gespeichert'; renderDiaList(); })
+    .catch(e => notify('Nicht gespeichert: ' + e)));
+}
+const flushDia = () => { clearTimeout(timers.get('dia')); if (curDia) saveDia(0); };
+
+function openDia(id) {
+  flushDia();
+  curDia = dias.find(d => d.id === id) || null;
+  auswahl = null; verbindeVon = null;
+  if (curDia) diaTitle.value = curDia.title;
+  renderDia(); renderDiaList();
+  $('#diasaved').textContent = 'gespeichert';
+  try { localStorage.setItem('lastDia', id); } catch { /* egal */ }
+}
+
+function newDia() {
+  flushDia();
+  const d = { id: crypto.randomUUID(), title: '', nodes: [], edges: [], created: Date.now(), updated: Date.now() };
+  dias.push(d);
+  curDia = d; auswahl = null; verbindeVon = null;
+  diaTitle.value = '';
+  tx('diagrams', s => s.put(d)).catch(e => notify('Nicht angelegt: ' + e));
+  renderDia(); renderDiaList();
+  diaTitle.focus();
+}
+
+function delDia(id) {
+  const i = dias.findIndex(d => d.id === id);
+  if (i < 0) return;
+  const [weg] = dias.splice(i, 1);
+  tx('diagrams', s => s.delete(id)).catch(e => notify('Nicht gelöscht: ' + e));
+  if (curDia && curDia.id === id) {
+    curDia = null;
+    const naechstes = [...dias].sort((a, b) => b.updated - a.updated)[0];
+    if (naechstes) openDia(naechstes.id); else { diaTitle.value = ''; renderDia(); renderDiaList(); }
+  } else renderDiaList();
+  offerUndo('Diagramm gelöscht', () => {
+    dias.push(weg);
+    tx('diagrams', s => s.put(weg)).catch(e => notify('Nicht wiederhergestellt: ' + e));
+    curDia = null; openDia(weg.id);
+  });
+}
+
+/* --- Bausteine ------------------------------------------------------------ */
+
+function addNode(shape) {
+  if (!curDia) return;
+  const n = { id: crypto.randomUUID(), shape, text: SHAPE_NAME[shape], x: 60, y: 60, w: 140, h: 48 };
+  // freien Platz suchen: spaltenweise von oben nach unten
+  const belegt = (x, y) => curDia.nodes.some(m => Math.abs(m.x - x) < 170 && Math.abs(m.y - y) < 80);
+  let x = 60, y = 60;
+  while (belegt(x, y)) { y += 90; if (y > HOEHE - 140) { y = 60; x += 200; } }
+  n.x = x; n.y = y;
+  curDia.nodes.push(n);
+  auswahl = n.id;
+  renderDia(); saveDia();
+  beschriften(n.id);
+}
+
+const SHAPE_NAME = { box: 'Kasten', round: 'Komponente', db: 'Datenbank', ext: 'Externes System' };
+
+function verbinde(zielId) {
+  if (!verbindeVon) { verbindeVon = zielId; renderDia(); return; }
+  if (verbindeVon !== zielId &&
+      !curDia.edges.some(e => e.from === verbindeVon && e.to === zielId)) {
+    curDia.edges.push({ id: crypto.randomUUID(), from: verbindeVon, to: zielId, text: '', dashed: false });
+    saveDia();
+  }
+  verbindeVon = zielId;                     // Kette weiterbauen: Ziel wird neue Quelle
+  renderDia();
+}
+
+function loeschen() {
+  if (!curDia || !auswahl) return;
+  const vorher = curDia.nodes.length + curDia.edges.length;
+  curDia.nodes = curDia.nodes.filter(n => n.id !== auswahl);
+  curDia.edges = curDia.edges.filter(e => e.id !== auswahl && e.from !== auswahl && e.to !== auswahl);
+  if (curDia.nodes.length + curDia.edges.length !== vorher) { auswahl = null; renderDia(); saveDia(); }
+}
+
+/* Beschriftung: kleines Eingabefeld direkt über dem Element. */
+function beschriften(id) {
+  const n = knoten(id), e = curDia.edges.find(x => x.id === id);
+  if (!n && !e) return;
+  const alt = canvas.querySelector('.dialabel');
+  if (alt) alt.remove();
+
+  const feld = document.createElement('input');
+  feld.className = 'dialabel';
+  feld.value = (n || e).text;
+  feld.maxLength = 120;
+  if (n) { feld.style.left = n.x + 'px'; feld.style.top = (n.y + n.h / 2 - 15) + 'px'; feld.style.width = Math.max(n.w, 150) + 'px'; }
+  else {
+    const a = knoten(e.from), b = knoten(e.to);
+    feld.style.left = ((a.x + b.x) / 2 + 20) + 'px';
+    feld.style.top = ((a.y + b.y) / 2 + 20) + 'px';
+    feld.style.width = '160px';
+  }
+  canvas.appendChild(feld);
+  feld.focus(); feld.select();
+
+  const fertig = speichern => {
+    if (speichern) { (n || e).text = feld.value.trim(); saveDia(); }
+    feld.remove();
+    renderDia();
+  };
+  feld.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') { ev.preventDefault(); fertig(true); }
+    if (ev.key === 'Escape') { ev.preventDefault(); fertig(false); }
+  });
+  feld.addEventListener('blur', () => fertig(true));
+}
+
+/* --- Maus ----------------------------------------------------------------- */
+
+const punkt = e => {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left + canvas.scrollLeft, y: e.clientY - r.top + canvas.scrollTop };
+};
+
+canvas.addEventListener('pointerdown', e => {
+  if (!curDia || e.target.closest('.dialabel')) return;
+  const g = e.target.closest('[data-n]'), l = e.target.closest('[data-e]');
+
+  if (g) {
+    const id = g.dataset.n;
+    if (verbindeModus) { verbinde(id); return; }
+    auswahl = id;
+    const n = knoten(id), p = punkt(e);
+    zieht = { id, dx: p.x - n.x, dy: p.y - n.y, bewegt: false };
+    canvas.setPointerCapture(e.pointerId);
+    renderDia();
+  } else if (l) {
+    auswahl = l.dataset.e; verbindeVon = null; renderDia();
+  } else {
+    auswahl = null; verbindeVon = null; renderDia();
+  }
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (!zieht) return;
+  const n = knoten(zieht.id);
+  if (!n) return;
+  const p = punkt(e);
+  const x = Math.max(0, Math.min(BREITE - n.w, Math.round((p.x - zieht.dx) / GRID) * GRID));
+  const y = Math.max(0, Math.min(HOEHE - n.h, Math.round((p.y - zieht.dy) / GRID) * GRID));
+  if (x === n.x && y === n.y) return;
+  n.x = x; n.y = y; zieht.bewegt = true;
+  later('diaframe', 0, renderDia);
+});
+
+canvas.addEventListener('pointerup', () => {
+  if (!zieht) return;
+  if (zieht.bewegt) saveDia();
+  zieht = null;
+});
+
+canvas.addEventListener('dblclick', e => {
+  const g = e.target.closest('[data-n]'), l = e.target.closest('[data-e]');
+  if (g) beschriften(g.dataset.n);
+  else if (l) beschriften(l.dataset.e);
+});
+
+$$('[data-add]').forEach(b => b.addEventListener('click', () => addNode(b.dataset.add)));
+$('#newdia').addEventListener('click', newDia);
+$('#dia-del').addEventListener('click', loeschen);
+$('#dia-connect').addEventListener('click', () => {
+  verbindeModus = !verbindeModus;
+  verbindeVon = null;
+  renderDia();
+});
+$('#dia-dash').addEventListener('click', () => {
+  const e = curDia && curDia.edges.find(x => x.id === auswahl);
+  if (!e) return notify('Erst einen Pfeil anklicken');
+  e.dashed = !e.dashed;
+  renderDia(); saveDia();
+});
+diaTitle.addEventListener('input', () => saveDia(400));
+
+$('#dialist').addEventListener('click', e => {
+  const li = e.target.closest('li');
+  if (!li) return;
+  if (e.target.classList.contains('ddel')) delDia(li.dataset.id);
+  else openDia(li.dataset.id);
+});
+
+/* --- Ins Dokument einbetten ----------------------------------------------- */
+
+$('#dia-insert').addEventListener('click', async () => {
+  if (!curDia || !curDia.nodes.length) return notify('Diagramm ist leer');
+  if (!docs.length) return notify('Erst ein Dokument im Reiter Text anlegen');
+  flushDia();
+
+  const id = 'dia:' + curDia.id;
+  const blob = new Blob([svgOf(curDia)], { type: 'image/svg+xml' });
+  await tx('images', s => s.put({ id, blob })).catch(e => notify('Nicht gespeichert: ' + e));
+  if (imgUrls.has(id)) URL.revokeObjectURL(imgUrls.get(id));
+  const url = URL.createObjectURL(blob);
+  imgUrls.set(id, url);
+
+  setTab('text');
+  const vorhanden = editor.querySelector(`img[data-img="${id}"]`);
+  if (vorhanden) {
+    vorhanden.src = url;
+    notify('Diagramm im Dokument aktualisiert');
+  } else {
+    ensureTail();
+    editor.focus();
+    caretToEnd(editor.lastElementChild);
+    exec('insertHTML', `<img data-img="${id}" src="${url}" alt="${esc(curDia.title || 'Diagramm')}"><p><br></p>`);
+    notify('Diagramm ins Dokument eingefügt');
+  }
+  touch(); flushDoc();
+});
+
+$('#exportsvg').addEventListener('click', () => {
+  if (!curDia || !curDia.nodes.length) return notify('Diagramm ist leer');
+  flushDia();
+  download(svgOf(curDia), `${(curDia.title || 'diagramm').replace(/[^\wäöüÄÖÜß .-]+/g, '_').trim()}.svg`, 'image/svg+xml');
+});
+
 /* ============================================================== REITER ===== */
 
 function setTab(name) {
   if (name !== 'text') flushDoc();
+  if (name !== 'dia') flushDia();
   tab = name;
   document.body.dataset.tab = name;
   $$('.maintabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
-  $('#v-tasks').hidden = name !== 'tasks';
-  $('#v-text').hidden  = name !== 'text';
-  $('#keys-tasks').hidden = name !== 'tasks';
-  $('#keys-text').hidden  = name !== 'text';
+  for (const v of ['tasks', 'text', 'dia']) {
+    $('#v-' + v).hidden = v !== name;
+    $('#keys-' + v).hidden = v !== name;
+  }
   updateCount();
   try { localStorage.setItem('tab', name); } catch { /* egal */ }
   if (name === 'text' && curDoc) { markEmpty(); countWords(); }
+  if (name === 'dia') renderDia();
 }
 
 $$('.maintabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
@@ -807,6 +1175,26 @@ const cleanTask = t => ({
   updated: Date.now(),
 });
 
+const cleanDia = g => ({
+  id: typeof g.id === 'string' && g.id ? g.id : crypto.randomUUID(),
+  title: String(g.title ?? '').slice(0, 200),
+  nodes: g.nodes.filter(n => n && typeof n.id === 'string').map(n => ({
+    id: n.id,
+    shape: SHAPE_NAME[n.shape] ? n.shape : 'box',
+    text: String(n.text ?? '').slice(0, 120),
+    x: Number(n.x) || 0, y: Number(n.y) || 0,
+    w: Number(n.w) || 140, h: Number(n.h) || 48,
+  })),
+  edges: (Array.isArray(g.edges) ? g.edges : []).filter(e => e && e.from && e.to).map(e => ({
+    id: typeof e.id === 'string' && e.id ? e.id : crypto.randomUUID(),
+    from: e.from, to: e.to,
+    text: String(e.text ?? '').slice(0, 120),
+    dashed: !!e.dashed,
+  })),
+  created: Number(g.created) || Date.now(),
+  updated: Number(g.updated) || Date.now(),
+});
+
 const cleanDoc = d => ({
   id: typeof d.id === 'string' && d.id ? d.id : crypto.randomUUID(),
   title: String(d.title ?? '').slice(0, 200),
@@ -816,13 +1204,13 @@ const cleanDoc = d => ({
 });
 
 $('#export').addEventListener('click', async () => {
-  flushDoc();
+  flushDoc(); flushDia();
   const bilder = [];
   for (const i of (await all('images')) || [])
     bilder.push({ id: i.id, data: await toDataURL(i.blob) });
-  download(JSON.stringify({ app: 'aufgaben', version: 2, tasks, docs, images: bilder }, null, 1),
+  download(JSON.stringify({ app: 'aufgaben', version: 3, tasks, docs, diagrams: dias, images: bilder }, null, 1),
            `sicherung-${todayISO()}.json`);
-  notify(`${pl(tasks.length, 'Aufgabe', 'Aufgaben')}, ${pl(docs.length, 'Dokument', 'Dokumente')}, ${pl(bilder.length, 'Bild', 'Bilder')} gesichert`);
+  notify(`${pl(tasks.length, 'Aufgabe', 'Aufgaben')}, ${pl(docs.length, 'Dokument', 'Dokumente')}, ${pl(dias.length, 'Diagramm', 'Diagramme')}, ${pl(bilder.length, 'Bild', 'Bilder')} gesichert`);
 });
 
 $('#import').addEventListener('change', async e => {
@@ -835,10 +1223,12 @@ $('#import').addEventListener('change', async e => {
     const tRows = (alt ? data : data.tasks || []).filter(t => t && typeof t.title === 'string').map(cleanTask);
     const dRows = (alt ? [] : data.docs || []).filter(d => d && typeof d === 'object').map(cleanDoc);
     const iRows = (alt ? [] : data.images || []).filter(i => i && typeof i.data === 'string');
-    if (!tRows.length && !dRows.length) throw new Error('nichts Brauchbares enthalten');
+    const gRows = (alt ? [] : data.diagrams || []).filter(g => g && Array.isArray(g.nodes)).map(cleanDia);
+    if (!tRows.length && !dRows.length && !gRows.length) throw new Error('nichts Brauchbares enthalten');
 
     if (tRows.length) await tx('tasks', s => tRows.forEach(t => s.put(t)));
     if (dRows.length) await tx('docs',  s => dRows.forEach(d => s.put(d)));
+    if (gRows.length) await tx('diagrams', s => gRows.forEach(g => s.put(g)));
     for (const im of iRows) {
       const blob = await (await fetch(im.data)).blob();
       await tx('images', s => s.put({ id: im.id, blob }));
@@ -846,12 +1236,15 @@ $('#import').addEventListener('change', async e => {
 
     tasks = await all('tasks');
     docs = await all('docs');
-    curDoc = null;
+    dias = await all('diagrams');
+    curDoc = null; curDia = null;
     releaseImages();
-    render(); renderDocs();
+    render(); renderDocs(); renderDiaList();
     const neuestes = [...docs].sort((a, b) => b.updated - a.updated)[0];
     if (neuestes) await openDoc(neuestes.id);
-    notify(`${pl(tRows.length, 'Aufgabe', 'Aufgaben')}, ${pl(dRows.length, 'Dokument', 'Dokumente')}, ${pl(iRows.length, 'Bild', 'Bilder')} übernommen`);
+    const neuestesDia = [...dias].sort((a, b) => b.updated - a.updated)[0];
+    if (neuestesDia) openDia(neuestesDia.id);
+    notify(`${pl(tRows.length, 'Aufgabe', 'Aufgaben')}, ${pl(dRows.length, 'Dokument', 'Dokumente')}, ${pl(gRows.length, 'Diagramm', 'Diagramme')}, ${pl(iRows.length, 'Bild', 'Bilder')} übernommen`);
   } catch (err) {
     notify('Import fehlgeschlagen: ' + err.message);
   }
@@ -887,6 +1280,12 @@ hr{border:0;border-top:1px solid #e7e9ee;margin:1.7em 0}a{color:#2f6bff}`;
 addEventListener('keydown', e => {
   const typing = /^(INPUT|TEXTAREA)$/.test(e.target.tagName) || e.target.isContentEditable;
 
+  if (tab === 'dia' && !typing) {                    // Diagramm-Tastatur
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); loeschen(); return; }
+    if (e.key === 'Enter' && auswahl) { e.preventDefault(); beschriften(auswahl); return; }
+    if (e.key === 'Escape') { auswahl = null; verbindeVon = null; verbindeModus = false; renderDia(); return; }
+  }
+
   if (e.key === 'Escape') {
     if (e.target.isContentEditable) { e.target.blur(); return; }
     if (editing !== null) { editing = null; render(); }
@@ -920,20 +1319,28 @@ openDB().then(async handle => {
   db = handle;
   tasks = (await all('tasks')).map(t => ({ note: '', due: '', prio: 0, ...t }));
   docs  = (await all('docs')).map(d => ({ title: '', html: '', ...d }));
+  dias  = (await all('diagrams')).map(d => ({ title: '', nodes: [], edges: [], ...d }));
 
   try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch { /* egal */ }
 
   render();
   renderDocs();
+  renderDiaList();
 
-  let letztes = null;
-  try { letztes = localStorage.getItem('lastDoc'); } catch { /* egal */ }
+  let letztes = null, letztesDia = null, reiter = 'tasks';
+  try {
+    letztes = localStorage.getItem('lastDoc');
+    letztesDia = localStorage.getItem('lastDia');
+    reiter = localStorage.getItem('tab') || 'tasks';
+  } catch { /* egal */ }
+
   const start = docs.find(d => d.id === letztes) || [...docs].sort((a, b) => b.updated - a.updated)[0];
   if (start) await openDoc(start.id);
 
-  let reiter = 'tasks';
-  try { reiter = localStorage.getItem('tab') || 'tasks'; } catch { /* egal */ }
-  setTab(reiter === 'text' ? 'text' : 'tasks');
+  const startDia = dias.find(d => d.id === letztesDia) || [...dias].sort((a, b) => b.updated - a.updated)[0];
+  if (startDia) openDia(startDia.id);
+
+  setTab(['text', 'dia'].includes(reiter) ? reiter : 'tasks');
 
   sweepImages();
   navigator.storage?.persist?.()?.catch(() => {});   // Browser soll die Daten nicht wegräumen

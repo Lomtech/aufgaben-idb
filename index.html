@@ -14,6 +14,7 @@
     <nav class="maintabs" aria-label="Bereich">
       <button type="button" data-tab="tasks" class="on">Aufgaben</button>
       <button type="button" data-tab="text">Text</button>
+      <button type="button" data-tab="dia">Diagramme</button>
     </nav>
     <span id="count"></span>
   </header>
@@ -32,6 +33,14 @@
         <button type="button" data-f="done">Erledigt</button>
       </div>
       <input id="q" type="search" placeholder="Suchen" autocomplete="off" aria-label="Aufgaben suchen">
+      <select id="sort" aria-label="Sortierung" title="Sortierung">
+        <option value="smart">Priorität &amp; Fälligkeit</option>
+        <option value="new">Neueste zuerst</option>
+        <option value="old">Älteste zuerst</option>
+        <option value="touched">Zuletzt geändert</option>
+        <option value="az">Name A–Z</option>
+        <option value="za">Name Z–A</option>
+      </select>
     </div>
 
     <ul id="list"></ul>
@@ -78,15 +87,53 @@
     <p id="nodocs" hidden>Noch kein Dokument – links auf <b>Neues Dokument</b> klicken.</p>
   </section>
 
+  <!-- ----------------------------------------------------------- Diagramme -->
+  <section id="v-dia" hidden>
+    <div class="doclayout">
+      <aside class="docs">
+        <button type="button" id="newdia">＋ Neues Diagramm</button>
+        <ul id="dialist"></ul>
+      </aside>
+
+      <div class="editor" id="diaeditor">
+        <input id="diatitle" placeholder="Titel des Diagramms" maxlength="200" autocomplete="off">
+
+        <div class="toolbar" role="toolbar" aria-label="Diagramm">
+          <button type="button" data-add="box" title="Rechteck">＋ Kasten</button>
+          <button type="button" data-add="round" title="Abgerundet – Dienst/Komponente">＋ Komponente</button>
+          <button type="button" data-add="db" title="Zylinder – Datenbank">＋ Datenbank</button>
+          <button type="button" data-add="ext" title="Gestrichelt – System außerhalb">＋ Extern</button>
+          <span class="sep"></span>
+          <button type="button" id="dia-connect" title="Erst Quelle, dann Ziel anklicken">Verbinden</button>
+          <button type="button" id="dia-dash" title="Pfeilart der Auswahl wechseln">Gestrichelt</button>
+          <button type="button" id="dia-del" title="Auswahl löschen (Entf)">Löschen</button>
+          <span class="sep"></span>
+          <button type="button" id="dia-insert" title="Als Bild ins offene Dokument">Ins Dokument</button>
+        </div>
+
+        <div class="canvas" id="canvas"></div>
+
+        <div class="docfoot">
+          <span id="diahint">Doppelklick beschriftet · Ziehen verschiebt · <b>Verbinden</b>: erst Quelle, dann Ziel · Entf löscht</span>
+          <span id="diasaved"></span>
+        </div>
+      </div>
+    </div>
+
+    <p id="nodias" hidden>Noch kein Diagramm – links auf <b>Neues Diagramm</b> klicken.</p>
+  </section>
+
   <footer>
     <div class="acts">
       <button type="button" id="purge">Erledigte löschen</button>
       <button type="button" id="exportdoc">Dokument als HTML</button>
+      <button type="button" id="exportsvg">Diagramm als SVG</button>
       <button type="button" id="export">Sichern</button>
       <label class="file" tabindex="0">Laden<input type="file" id="import" accept="application/json,.json" hidden></label>
     </div>
     <p class="keys" id="keys-tasks"><kbd>N</kbd> neu · <kbd>/</kbd> suchen · <kbd>Enter</kbd> speichern · <kbd>Esc</kbd> abbrechen</p>
-    <p class="keys" id="keys-text" hidden><kbd>⌘1</kbd>–<kbd>⌘3</kbd> Überschrift · <kbd>⌘0</kbd> Text · <kbd>⌘B</kbd> fett · <kbd>⌘V</kbd> Screenshot · speichert selbst</p>
+    <p class="keys" id="keys-text" hidden><kbd>⌘1</kbd>–<kbd>⌘3</kbd> Überschrift · <kbd>⌘0</kbd> Text · <kbd>⌘B</kbd> fett · <kbd>⌘V</kbd> Screenshot · <kbd>⌘↩</kbd> raus aus Code-Block · speichert selbst</p>
+    <p class="keys" id="keys-dia" hidden><kbd>Entf</kbd> löschen · <kbd>Esc</kbd> Auswahl aufheben · <kbd>↩</kbd> beschriften · speichert selbst</p>
   </footer>
 </main>
 
