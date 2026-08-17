@@ -74,6 +74,18 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;ma
   transition:border-color .12s;
 }
 #q:focus{outline:none;border-color:var(--accent)}
+#sort{
+  flex:none;height:30px;padding:0 6px;font-size:12.5px;color:var(--muted);
+  background:var(--bg);border:1px solid var(--line);border-radius:8px;cursor:pointer;
+  transition:border-color .12s,color .12s;
+}
+#sort:hover{color:var(--text)}
+#sort:focus{outline:none;border-color:var(--accent)}
+
+.when{
+  flex:none;font-size:11.5px;color:#a8aeb9;font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+#list li:hover .when{color:var(--muted)}
 
 /* ------------------------------------------------------------------ Liste --- */
 

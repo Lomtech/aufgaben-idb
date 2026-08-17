@@ -112,6 +112,19 @@ function fmtDue(iso) {
 }
 const fmtStamp = ms => new Date(ms).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
 
+/* Kurzer Zeitstempel für die Zeile: heute die Uhrzeit, sonst das Datum. */
+function fmtWhen(ms) {
+  const d = new Date(ms);
+  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  if (iso === todayISO()) return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const gleichesJahr = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString('de-DE', gleichesJahr
+    ? { day: '2-digit', month: '2-digit' }
+    : { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+const fmtVoll = ms => new Date(ms).toLocaleString('de-DE',
+  { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
 /* =========================================================== AUFGABEN ====== */
 
 function row(t) {
@@ -128,6 +141,7 @@ function row(t) {
         ? `<input class="edit" data-k="edit" value="${esc(t.title)}" maxlength="500">`
         : `<span class="t" data-k="t" tabindex="0" role="button">${esc(t.title)}</span>`}
       ${badge}
+      <span class="when" title="angelegt ${fmtVoll(t.created)}${t.updated ? ` · geändert ${fmtVoll(t.updated)}` : ''}">${fmtWhen(sort === 'touched' ? (t.updated || t.created) : t.created)}</span>
       <button type="button" class="prio" data-k="prio" title="Priorität: ${PRIO[t.prio]}" aria-label="Priorität: ${PRIO[t.prio]}"></button>
       <button type="button" class="more" data-k="more" title="Details" aria-expanded="${open}" aria-label="Details">▾</button>
       <button type="button" class="del" data-k="del" title="Löschen" aria-label="Löschen">×</button>
@@ -135,7 +149,7 @@ function row(t) {
     ${open ? `<div class="detail">
       <textarea class="note" data-k="note" placeholder="Notiz …">${esc(t.note)}</textarea>
       <label>Fällig <input type="date" class="due" data-k="due" value="${t.due}"></label>
-      <span class="stamp">angelegt ${fmtStamp(t.created)}</span>
+      <span class="stamp">angelegt ${fmtVoll(t.created)}${t.updated && t.updated - t.created > 60000 ? ` · geändert ${fmtVoll(t.updated)}` : ''}</span>
     </div>` : ''}
   </li>`;
 }
@@ -306,6 +320,12 @@ $$('.tabs button').forEach(b =>
   b.addEventListener('click', () => { setFilter(b.dataset.f); render(); }));
 
 qIn.addEventListener('input', () => { query = qIn.value; render(); });
+
+$('#sort').addEventListener('change', e => {
+  sort = SORTEN[e.target.value] ? e.target.value : 'smart';
+  try { localStorage.setItem('sort', sort); } catch { /* egal */ }
+  render();
+});
 
 /* =============================================================== TEXT ====== */
 
@@ -844,6 +864,9 @@ function inhalt(d, aktivId) {
 const PFEIL = `<defs><marker id="pfeil" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
   orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8f97a6"/></marker></defs>`;
 
+/* Ein eingebettetes SVG erbt nichts von der Seite – Schrift muss hinein. */
+const SCHRIFT = 'font-family="system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif"';
+
 /* Fürs Einbetten: eng zugeschnitten, ohne Auswahl-Hervorhebung. */
 function svgOf(d) {
   if (!d.nodes.length) return `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>`;
@@ -854,13 +877,13 @@ function svgOf(d) {
   const x1 = Math.max(...d.nodes.map(n => n.x + n.w)) + rand;
   const y1 = Math.max(...d.nodes.map(n => n.y + n.h)) + rand;
   const w = Math.round(x1 - x0), h = Math.round(y1 - y0);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${x0} ${y0} ${w} ${h}">`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${x0} ${y0} ${w} ${h}" ${SCHRIFT}>`
        + `${PFEIL}<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#fff"/>${inhalt(d, null)}</svg>`;
 }
 
 function renderDia() {
   if (!curDia) { canvas.innerHTML = ''; return; }
-  canvas.innerHTML = `<svg width="${BREITE}" height="${HOEHE}" viewBox="0 0 ${BREITE} ${HOEHE}">${PFEIL}${inhalt(curDia, auswahl)}</svg>`;
+  canvas.innerHTML = `<svg width="${BREITE}" height="${HOEHE}" viewBox="0 0 ${BREITE} ${HOEHE}" ${SCHRIFT}>${PFEIL}${inhalt(curDia, auswahl)}</svg>`;
   $('#dia-connect').classList.toggle('on', verbindeModus);
 }
 
@@ -1332,6 +1355,8 @@ openDB().then(async handle => {
     letztes = localStorage.getItem('lastDoc');
     letztesDia = localStorage.getItem('lastDia');
     reiter = localStorage.getItem('tab') || 'tasks';
+    const s = localStorage.getItem('sort');
+    if (SORTEN[s]) { sort = s; $('#sort').value = s; render(); }
   } catch { /* egal */ }
 
   const start = docs.find(d => d.id === letztes) || [...docs].sort((a, b) => b.updated - a.updated)[0];
