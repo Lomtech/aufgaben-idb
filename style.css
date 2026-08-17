@@ -215,8 +215,8 @@ kbd{
 }
 .ddel:hover{background:var(--hover);color:var(--over)}
 
-/* Editor */
-.editor{flex:1;min-width:0}
+/* Editor – begrenzte Zeilenlänge, sonst wird langer Fließtext unlesbar */
+.editor{flex:1;min-width:0;max-width:760px}
 #doctitle{
   width:100%;padding:2px 0 6px;font-size:27px;font-weight:680;letter-spacing:-.02em;
   background:none;border:0;border-bottom:1px solid transparent;transition:border-color .12s;

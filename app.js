@@ -663,6 +663,8 @@ $('#undo').addEventListener('click', () => {
 
 /* --------------------------------------------------------- Sichern/Laden --- */
 
+const pl = (n, ein, viele) => `${n} ${n === 1 ? ein : viele}`;
+
 const toDataURL = blob => new Promise((res, rej) => {
   const r = new FileReader();
   r.onload = () => res(r.result);
@@ -704,7 +706,7 @@ $('#export').addEventListener('click', async () => {
     bilder.push({ id: i.id, data: await toDataURL(i.blob) });
   download(JSON.stringify({ app: 'aufgaben', version: 2, tasks, docs, images: bilder }, null, 1),
            `sicherung-${todayISO()}.json`);
-  notify(`${tasks.length} Aufgaben, ${docs.length} Dokumente, ${bilder.length} Bilder gesichert`);
+  notify(`${pl(tasks.length, 'Aufgabe', 'Aufgaben')}, ${pl(docs.length, 'Dokument', 'Dokumente')}, ${pl(bilder.length, 'Bild', 'Bilder')} gesichert`);
 });
 
 $('#import').addEventListener('change', async e => {
@@ -733,7 +735,7 @@ $('#import').addEventListener('change', async e => {
     render(); renderDocs();
     const neuestes = [...docs].sort((a, b) => b.updated - a.updated)[0];
     if (neuestes) await openDoc(neuestes.id);
-    notify(`${tRows.length} Aufgaben, ${dRows.length} Dokumente, ${iRows.length} Bilder übernommen`);
+    notify(`${pl(tRows.length, 'Aufgabe', 'Aufgaben')}, ${pl(dRows.length, 'Dokument', 'Dokumente')}, ${pl(iRows.length, 'Bild', 'Bilder')} übernommen`);
   } catch (err) {
     notify('Import fehlgeschlagen: ' + err.message);
   }
