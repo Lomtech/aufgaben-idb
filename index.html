@@ -31,17 +31,15 @@
     <section id="v-tasks">
       <form id="new" autocomplete="off">
         <input id="title" placeholder="Neue Aufgabe …" maxlength="500" autofocus>
+        <select id="newproj" aria-label="Projekt der neuen Aufgabe" title="Projekt"></select>
         <button type="submit" title="Hinzufügen" aria-label="Hinzufügen">+</button>
       </form>
 
       <div class="bar">
-        <div class="tabs" role="group" aria-label="Filter">
-          <button type="button" data-f="open" class="on">Offen</button>
-          <button type="button" data-f="all">Alle</button>
-          <button type="button" data-f="done">Erledigt</button>
-        </div>
         <input id="q" type="search" placeholder="Suchen" autocomplete="off" aria-label="Aufgaben suchen">
+        <select id="projfilter" aria-label="Nach Projekt filtern" title="Projekt"></select>
         <select id="sort" aria-label="Sortierung" title="Sortierung">
+          <option value="manuell">Eigene Reihenfolge</option>
           <option value="smart">Priorität &amp; Fälligkeit</option>
           <option value="new">Neueste zuerst</option>
           <option value="old">Älteste zuerst</option>
@@ -51,7 +49,7 @@
         </select>
       </div>
 
-      <ul id="list"></ul>
+      <div class="board" id="board"></div>
       <p id="empty" hidden></p>
     </section>
 

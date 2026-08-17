@@ -11,7 +11,7 @@
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
-const list = $('#list'), titleIn = $('#title'), qIn = $('#q'), toast = $('#toast');
+const titleIn = $('#title'), qIn = $('#q'), toast = $('#toast');
 const editor = $('#doc'), docTitle = $('#doctitle');
 const tree = $('#tree'), railQ = $('#railq');
 
@@ -19,7 +19,11 @@ const PRIO = ['ohne', 'mittel', 'hoch'];
 
 let tab = 'tasks';
 let tasks = [], docs = [];
-let filter = 'open', query = '', sort = 'smart';
+let query = '', sort = 'manuell';
+let projekte = [];          // { id, name, color }
+let projFilter = '';        // Filter über dem Brett
+let neuProj = '';           // Projekt für neue Aufgaben
+let neueSpalte = 'open';    // Spalte für neue Aufgaben (über das ＋ einer Spalte gesetzt)
 let editing = null;    // id, deren Titel gerade im Eingabefeld hängt
 let openId = null;     // id, deren Detailbereich offen ist
 let curDoc = null;     // offenes Dokument
@@ -32,10 +36,11 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>'
 const byId = id => tasks.find(t => t.id === id);
 const dueKey = t => t.due || '9999-99-99';
 
-/* Sortierungen – erledigte Aufgaben stehen immer unten. */
+/* Sortierungen innerhalb einer Spalte. "manuell" ist die selbst gezogene Reihenfolge. */
 const nameCmp = (a, b) => a.title.localeCompare(b.title, 'de', { sensitivity: 'base', numeric: true });
 
 const SORTEN = {
+  manuell: (a, b) => (a.ord ?? a.created) - (b.ord ?? b.created),
   smart:   (a, b) => (b.prio - a.prio) ||
                      (dueKey(a) < dueKey(b) ? -1 : dueKey(a) > dueKey(b) ? 1 : 0) ||
                      (b.created - a.created),
@@ -46,7 +51,14 @@ const SORTEN = {
   za:      (a, b) => nameCmp(b, a),
 };
 
-const order = (a, b) => (a.done - b.done) || SORTEN[sort](a, b);
+const order = (a, b) => SORTEN[sort](a, b);
+
+/* Spalten des Bretts */
+const SPALTEN = [
+  { id: 'open',  name: 'Offen' },
+  { id: 'doing', name: 'In Arbeit' },
+  { id: 'done',  name: 'Erledigt' },
+];
 
 /* ------------------------------------------------------------- IndexedDB --- */
 
@@ -56,11 +68,11 @@ let db;
 function openDB() {
   return new Promise((resolve, reject) => {
     let req;
-    try { req = indexedDB.open(DB_NAME, 3); }
+    try { req = indexedDB.open(DB_NAME, 4); }
     catch (e) { return reject(e); }                  // file://, Privatmodus …
     req.onupgradeneeded = () => {
       const d = req.result;
-      for (const name of ['tasks', 'docs', 'images', 'diagrams'])
+      for (const name of ['tasks', 'docs', 'images', 'diagrams', 'projects'])
         if (!d.objectStoreNames.contains(name)) d.createObjectStore(name, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
@@ -127,50 +139,109 @@ const fmtVoll = ms => new Date(ms).toLocaleString('de-DE',
   { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 /* =========================================================== AUFGABEN ====== */
+/* Brett mit drei Spalten. Oberaufgaben sind Karten, Unteraufgaben hängen als
+   Häkchenliste in der Karte – sonst wächst das Brett unbrauchbar breit. */
 
-function row(t) {
-  const open = t.id === openId;
-  const cls = `p${t.prio}${t.done ? ' done' : ''}${open ? ' open' : ''}`;
+const board = $('#board');
+const kinderVon = id => tasks.filter(t => t.parent === id);
+const istOben = t => !t.parent;
+
+/* Kleine Auszeichnung im Text: `Code` wird monospace, Links werden anklickbar. */
+function schmuck(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+}
+
+const projekt = id => projekte.find(p => p.id === id);
+
+function chip(t) {
+  const p = projekt(t.projekt);
+  return p ? `<span class="chip" style="--c:${p.color}">${esc(p.name)}</span>` : '';
+}
+
+function karte(t) {
+  const auf = t.id === openId;
+  const kinder = kinderVon(t.id);
+  const fertig = kinder.filter(k => k.done).length;
   const badge = t.due
     ? `<span class="due-badge ${dayDiff(t.due) < 0 && !t.done ? 'over' : dayDiff(t.due) === 0 ? 'today' : ''}">${fmtDue(t.due)}</span>`
     : '';
 
-  return `<li data-id="${t.id}" class="${cls}">
-    <div class="main">
-      <input type="checkbox" class="check" data-k="check" ${t.done ? 'checked' : ''} aria-label="Erledigt">
-      ${editing === t.id
-        ? `<input class="edit" data-k="edit" value="${esc(t.title)}" maxlength="500">`
-        : `<span class="t" data-k="t" tabindex="0" role="button">${esc(t.title)}</span>`}
-      ${badge}
-      <span class="when" title="angelegt ${fmtVoll(t.created)}${t.updated ? ` · geändert ${fmtVoll(t.updated)}` : ''}">${fmtWhen(sort === 'touched' ? (t.updated || t.created) : t.created)}</span>
+  return `<article class="card p${t.prio}${auf ? ' open' : ''}" data-id="${t.id}">
+    <div class="chead">
+      ${chip(t)}
+      <span class="when" title="angelegt ${fmtVoll(t.created)} · geändert ${fmtVoll(t.updated || t.created)}">${fmtWhen(sort === 'touched' ? (t.updated || t.created) : t.created)}</span>
       <button type="button" class="prio" data-k="prio" title="Priorität: ${PRIO[t.prio]}" aria-label="Priorität: ${PRIO[t.prio]}"></button>
-      <button type="button" class="more" data-k="more" title="Details" aria-expanded="${open}" aria-label="Details">▾</button>
+      <button type="button" class="more" data-k="more" title="Details" aria-expanded="${auf}" aria-label="Details">▾</button>
       <button type="button" class="del" data-k="del" title="Löschen" aria-label="Löschen">×</button>
     </div>
-    ${open ? `<div class="detail">
+
+    ${editing === t.id
+      ? `<textarea class="edit" data-k="edit" maxlength="500">${esc(t.title)}</textarea>`
+      : `<div class="ctitle" data-k="t" tabindex="0" role="button">${schmuck(t.title)}</div>`}
+
+    ${t.note && !auf ? `<div class="cnote">${schmuck(t.note)}</div>` : ''}
+
+    ${kinder.length || badge ? `<div class="cfoot">
+      ${kinder.length ? `<span class="subprog${fertig === kinder.length ? ' voll' : ''}">${fertig}/${kinder.length}</span>` : ''}
+      ${badge}
+    </div>` : ''}
+
+    ${kinder.length ? `<ul class="subs">${kinder.map(k => `
+      <li data-id="${k.id}" class="${k.done ? 'done' : ''}">
+        <input type="checkbox" class="check" data-k="subcheck" ${k.done ? 'checked' : ''} aria-label="Erledigt">
+        <span class="st" data-k="t">${schmuck(k.title)}</span>
+        <button type="button" class="del" data-k="del" title="Löschen" aria-label="Löschen">×</button>
+      </li>`).join('')}</ul>` : ''}
+
+    ${auf ? `<div class="detail">
       <textarea class="note" data-k="note" placeholder="Notiz …">${esc(t.note)}</textarea>
       <label>Fällig <input type="date" class="due" data-k="due" value="${t.due}"></label>
-      <span class="stamp">angelegt ${fmtVoll(t.created)}${t.updated && t.updated - t.created > 60000 ? ` · geändert ${fmtVoll(t.updated)}` : ''}</span>
+      <label>Projekt <select class="projsel" data-k="proj">
+        <option value="">— ohne —</option>
+        ${projekte.map(p => `<option value="${p.id}"${p.id === t.projekt ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
+        <option value="+">＋ neues Projekt …</option>
+      </select></label>
+      <input class="subnew" data-k="subnew" placeholder="Unteraufgabe … (Enter)" maxlength="500">
     </div>` : ''}
-  </li>`;
+  </article>`;
+}
+
+function sichtbar() {
+  const q = query.trim().toLowerCase();
+  return tasks.filter(istOben).filter(t => {
+    if (projFilter && t.projekt !== projFilter) return false;
+    if (!q) return true;
+    if (t.title.toLowerCase().includes(q) || t.note.toLowerCase().includes(q)) return true;
+    return kinderVon(t.id).some(k => k.title.toLowerCase().includes(q));   // Treffer im Kind zeigt die Karte
+  });
 }
 
 function render() {
-  const q = query.trim().toLowerCase();
-  const view = tasks
-    .filter(t => filter === 'all' || (filter === 'done') === t.done)
-    .filter(t => !q || t.title.toLowerCase().includes(q) || t.note.toLowerCase().includes(q))
-    .sort(order);
-
   const focus = grabFocus();
-  list.innerHTML = view.map(row).join('');
+  const alle = sichtbar();
+
+  board.innerHTML = SPALTEN.map(sp => {
+    const drin = alle.filter(t => statusVon(t) === sp.id).sort(order);
+    return `<div class="col" data-col="${sp.id}">
+      <div class="colhead"><span>${sp.name}</span><b>${drin.length || ''}</b>
+        <button type="button" class="colplus" data-col="${sp.id}" title="Aufgabe in dieser Spalte" aria-label="Aufgabe hinzufügen">＋</button>
+      </div>
+      <div class="cards" data-col="${sp.id}">${drin.map(karte).join('')}</div>
+    </div>`;
+  }).join('');
+
   putFocus(focus);
 
   const empty = $('#empty');
-  empty.hidden = view.length > 0;
+  empty.hidden = alle.length > 0;
   empty.textContent = !tasks.length ? 'Noch nichts da – oben eintippen und Enter.' : 'Nichts gefunden.';
   updateCount();
+  projekteFuellen();
 }
+
+const statusVon = t => t.status || (t.done ? 'done' : 'open');
 
 /* =============================================================== BAUM ====== */
 /* Linke Leiste: Reiter → Eintrag → Überschrift → Unterüberschrift.
@@ -200,18 +271,20 @@ function renderTree() {
   const teile = [];
 
   /* Aufgaben */
-  const offen = tasks.filter(t => !t.done).length;
+  const offen = tasks.filter(t => statusVon(t) !== 'done').length;
   teile.push(zeile(1, 'tab:tasks', 'Aufgaben', offen, tab === 'tasks'));
   if (tab === 'tasks') {
-    for (const [f, name, liste] of [
-      ['open', 'Offen', tasks.filter(t => !t.done)],
-      ['all', 'Alle', tasks],
-      ['done', 'Erledigt', tasks.filter(t => t.done)],
-    ]) {
-      teile.push(zeile(2, 'f:' + f, name, liste.length, filter === f));
-      if (filter === f)
-        for (const t of [...liste].sort(order).filter(t => passt(t.title)))
-          teile.push(zeile(3, 't:' + t.id, t.title));
+    const gruppen = [{ id: '', name: 'Ohne Projekt' }, ...projekte];
+    for (const g of gruppen) {
+      const drin = tasks.filter(t => istOben(t) && (t.projekt || '') === g.id);
+      if (!drin.length) continue;
+      const aktiv = projFilter === g.id && g.id !== '';
+      teile.push(zeile(2, 'p:' + g.id, g.name, drin.filter(t => statusVon(t) !== 'done').length, aktiv));
+      for (const t of drin.sort(order).filter(t => passt(t.title))) {
+        teile.push(zeile(3, 't:' + t.id, t.title));
+        for (const k of kinderVon(t.id).filter(k => passt(k.title)))
+          teile.push(zeile(4, 't:' + k.id, k.title));
+      }
     }
   }
 
@@ -264,7 +337,7 @@ tree.addEventListener('click', e => {
   const [art, id] = trenne(li.dataset.go);
 
   if (art === 'tab')      setTab(id);
-  else if (art === 'f')   { setFilter(id); render(); }
+  else if (art === 'p')   { projFilter = projFilter === id ? '' : id; render(); }
   else if (art === 't')   zeigeAufgabe(id);
   else if (art === 'doc') openDoc(id);
   else if (art === 'h')   springeZuUeberschrift(+id);
@@ -287,9 +360,10 @@ function zeigeAufgabe(id) {
   setTab('tasks');
   const t = byId(id);
   if (!t) return;
-  if (filter !== 'all' && (filter === 'done') !== t.done) setFilter('all');
+  if (projFilter && (t.projekt || '') !== projFilter) projFilter = '';   // sonst unsichtbar
+  if (t.parent) openId = t.parent;                                       // Unteraufgabe: Karte aufklappen
   render();
-  hervorheben(list.querySelector(`li[data-id="${id}"]`));
+  hervorheben(board.querySelector(`[data-id="${id}"]`));
 }
 
 function springeZuUeberschrift(i) {
@@ -310,16 +384,16 @@ function zeigeKnoten(id) {
 /* Cursor überlebt das Neuzeichnen der Liste. */
 function grabFocus() {
   const el = document.activeElement;
-  const li = el && el.closest && el.closest('#list li');
-  if (!li || !el.dataset.k) return null;
+  const karte = el && el.closest && el.closest('#board .card');
+  if (!karte || !el.dataset.k) return null;
   let pos = null;
   try { pos = el.selectionStart; } catch { /* Datumsfelder kennen keine Auswahl */ }
-  return { id: li.dataset.id, k: el.dataset.k, pos };
+  return { id: karte.dataset.id, k: el.dataset.k, pos };
 }
 
 function putFocus(f) {
   if (!f) return;
-  const el = list.querySelector(`li[data-id="${f.id}"] [data-k="${f.k}"]`);
+  const el = board.querySelector(`.card[data-id="${f.id}"] [data-k="${f.k}"]`);
   if (!el) return;
   el.focus();
   if (f.pos != null) { try { el.setSelectionRange(f.pos, f.pos); } catch { /* egal */ } }
@@ -333,17 +407,30 @@ function patch(id, changes) {
   render();
 }
 
+function setStatus(t, st) {
+  t.status = st;
+  t.done = st === 'done';                       // mitführen, damit alte Sicherungen weiter passen
+}
+
+function neueAufgabe(title, { status = 'open', parent = null, proj = null } = {}) {
+  const t = {
+    id: crypto.randomUUID(), title, note: '', done: status === 'done', status, parent,
+    projekt: parent ? (byId(parent)?.projekt || '') : (proj ?? neuProj),
+    prio: 0, due: '', ord: Date.now(), created: Date.now(), updated: Date.now(),
+  };
+  tasks.push(t);
+  saveTask(t);
+  return t;
+}
+
 $('#new').addEventListener('submit', e => {
   e.preventDefault();
   const title = titleIn.value.trim();
   if (!title) return;
   titleIn.value = '';
-
-  const t = { id: crypto.randomUUID(), title, note: '', done: false, prio: 0, due: '', created: Date.now(), updated: Date.now() };
-  tasks.push(t);
-  saveTask(t);
-
-  if (filter === 'done') setFilter('open');                       // sonst sofort unsichtbar
+  neueAufgabe(title, { status: neueSpalte });
+  neueSpalte = 'open';
+  titleIn.placeholder = 'Neue Aufgabe …';
   if (query && !title.toLowerCase().includes(query.trim().toLowerCase())) { query = ''; qIn.value = ''; }
   render();
 });
@@ -353,10 +440,16 @@ titleIn.addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); $('#new').requestSubmit(); }
 });
 
-list.addEventListener('click', e => {
-  const li = e.target.closest('li');
-  if (!li) return;
-  const id = li.dataset.id, k = e.target.dataset.k;
+board.addEventListener('click', e => {
+  const k = e.target.dataset.k;
+  const sub = e.target.closest('.subs li');
+  const karte = e.target.closest('.card');
+  if (!karte) {
+    const plus = e.target.closest('.colplus');
+    if (plus) { titleIn.focus(); neueSpalte = plus.dataset.col; titleIn.placeholder = `Neue Aufgabe in „${SPALTEN.find(s => s.id === plus.dataset.col).name}" …`; }
+    return;
+  }
+  const id = sub ? sub.dataset.id : karte.dataset.id;
 
   if (k === 't')         { editing = id; render(); }
   else if (k === 'prio') patch(id, { prio: (byId(id).prio + 1) % 3 });
@@ -364,90 +457,268 @@ list.addEventListener('click', e => {
   else if (k === 'del')  remove(id);
 });
 
-list.addEventListener('change', e => {
-  const li = e.target.closest('li');
-  if (!li) return;
-  if (e.target.dataset.k === 'check') patch(li.dataset.id, { done: e.target.checked });
-  if (e.target.dataset.k === 'due')   patch(li.dataset.id, { due: e.target.value });
+board.addEventListener('change', e => {
+  const k = e.target.dataset.k;
+  const sub = e.target.closest('.subs li');
+  const karte = e.target.closest('.card');
+  if (!karte) return;
+  const id = sub ? sub.dataset.id : karte.dataset.id;
+
+  if (k === 'subcheck') { const t = byId(id); if (t) { setStatus(t, e.target.checked ? 'done' : 'open'); saveTask(t); render(); } }
+  if (k === 'due')  patch(id, { due: e.target.value });
+  if (k === 'proj') projektWaehlen(id, e.target.value);
 });
 
-list.addEventListener('input', e => {
+board.addEventListener('input', e => {
   if (e.target.dataset.k !== 'note') return;
-  const t = byId(e.target.closest('li').dataset.id);
+  const t = byId(e.target.closest('.card').dataset.id);
   if (!t) return;
   t.note = e.target.value;
   saveTask(t, 300);
 });
 
-list.addEventListener('keydown', e => {
+board.addEventListener('keydown', e => {
   const k = e.target.dataset.k;
   if (k === 't' && (e.key === 'Enter' || e.key === ' ')) {
     e.preventDefault();
-    editing = e.target.closest('li').dataset.id;
+    const sub = e.target.closest('.subs li');
+    editing = sub ? sub.dataset.id : e.target.closest('.card').dataset.id;
     render();
+    return;
+  }
+  if (k === 'subnew' && e.key === 'Enter') {
+    e.preventDefault();
+    const titel = e.target.value.trim();
+    if (!titel) return;
+    neueAufgabe(titel, { parent: e.target.closest('.card').dataset.id });
+    e.target.value = '';
+    render();
+    return;
   }
   if (k !== 'edit') return;
-  if (e.key === 'Enter')  e.target.blur();
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.blur(); }
   if (e.key === 'Escape') { editing = null; render(); }
 });
 
-list.addEventListener('focusout', e => {
+board.addEventListener('focusout', e => {
   const k = e.target.dataset.k;
-  const li = e.target.closest('li');
-  if (!li) return;
+  const karte = e.target.closest('.card');
+  if (!karte) return;
 
-  if (k === 'note') { const t = byId(li.dataset.id); if (t) saveTask(t); return; }
+  if (k === 'note') { const t = byId(karte.dataset.id); if (t) saveTask(t); return; }
   if (k !== 'edit' || editing === null) return;                   // per Esc schon verworfen
 
-  const t = byId(li.dataset.id), title = e.target.value.trim();
+  const t = byId(editing), title = e.target.value.trim();
   editing = null;
   if (t && title && title !== t.title) patch(t.id, { title });
   else render();
 });
 
+/* Löschen nimmt Unteraufgaben mit – und bringt sie beim Rückgängig zurück. */
 function remove(id) {
-  const i = tasks.findIndex(t => t.id === id);
-  if (i < 0) return;
-  const [gone] = tasks.splice(i, 1);
+  const weg = tasks.filter(t => t.id === id || t.parent === id);
+  if (!weg.length) return;
+  tasks = tasks.filter(t => !weg.includes(t));
   if (editing === id) editing = null;
   if (openId === id) openId = null;
   render();
-  tx('tasks', s => s.delete(id)).catch(e => notify('Nicht gelöscht: ' + e));
-  offerUndo('Gelöscht', () => {
-    tasks.push(gone);
-    tx('tasks', s => s.put(gone)).catch(e => notify('Nicht wiederhergestellt: ' + e));
+  tx('tasks', s => weg.forEach(t => s.delete(t.id))).catch(e => notify('Nicht gelöscht: ' + e));
+  offerUndo(weg.length > 1 ? `Gelöscht (mit ${weg.length - 1} Unteraufgaben)` : 'Gelöscht', () => {
+    tasks.push(...weg);
+    tx('tasks', s => weg.forEach(t => s.put(t))).catch(e => notify('Nicht wiederhergestellt: ' + e));
     render();
   });
 }
 
 $('#purge').addEventListener('click', () => {
-  const done = tasks.filter(t => t.done);
-  if (!done.length) return notify('Nichts zu löschen');
-  tasks = tasks.filter(t => !t.done);
+  const fertig = tasks.filter(t => statusVon(t) === 'done');
+  if (!fertig.length) return notify('Nichts zu löschen');
+  tasks = tasks.filter(t => !fertig.includes(t));
   render();
-  tx('tasks', s => done.forEach(t => s.delete(t.id))).catch(e => notify('Nicht gelöscht: ' + e));
-  offerUndo(`${done.length} gelöscht`, () => {
-    tasks.push(...done);
-    tx('tasks', s => done.forEach(t => s.put(t))).catch(e => notify('Nicht wiederhergestellt: ' + e));
+  tx('tasks', s => fertig.forEach(t => s.delete(t.id))).catch(e => notify('Nicht gelöscht: ' + e));
+  offerUndo(`${fertig.length} gelöscht`, () => {
+    tasks.push(...fertig);
+    tx('tasks', s => fertig.forEach(t => s.put(t))).catch(e => notify('Nicht wiederhergestellt: ' + e));
     render();
   });
 });
 
-function setFilter(f) {
-  filter = f;
-  $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.f === f));
-}
-
-$$('.tabs button').forEach(b =>
-  b.addEventListener('click', () => { setFilter(b.dataset.f); render(); }));
-
 qIn.addEventListener('input', () => { query = qIn.value; render(); });
 
 $('#sort').addEventListener('change', e => {
-  sort = SORTEN[e.target.value] ? e.target.value : 'smart';
+  sort = SORTEN[e.target.value] ? e.target.value : 'manuell';
   try { localStorage.setItem('sort', sort); } catch { /* egal */ }
   render();
 });
+
+/* --------------------------------------------------------------- Projekte --- */
+
+const FARBEN = ['#2f6bff', '#e0533d', '#1f9d63', '#b26a00', '#8b5cf6', '#0d9488', '#d946a0', '#5b6472'];
+
+async function projektAnlegen(name) {
+  const sauber = String(name).trim().slice(0, 60);
+  if (!sauber) return null;
+  const da = projekte.find(p => p.name.toLowerCase() === sauber.toLowerCase());
+  if (da) return da;
+  const p = { id: crypto.randomUUID(), name: sauber, color: FARBEN[projekte.length % FARBEN.length] };
+  projekte.push(p);
+  await tx('projects', s => s.put(p)).catch(e => notify('Projekt nicht gespeichert: ' + e));
+  return p;
+}
+
+async function projektWaehlen(id, wert) {
+  let ziel = wert;
+  if (wert === '+') {
+    const name = prompt('Name des neuen Projekts:');
+    const p = name ? await projektAnlegen(name) : null;
+    ziel = p ? p.id : (byId(id)?.projekt || '');
+  }
+  const t = byId(id);
+  if (!t) return;
+  t.projekt = ziel;
+  kinderVon(id).forEach(k => { k.projekt = ziel; saveTask(k); });     // Kinder erben
+  saveTask(t);
+  render();
+}
+
+/* Einmalig beim ersten Start: „Kunde – Titel" in ein echtes Projektfeld überführen.
+   Nur Präfixe, die mindestens zweimal vorkommen – und mit Rückgängig. */
+async function praefixeUebernehmen() {
+  try {
+    if (localStorage.getItem('praefixe')) return;
+    localStorage.setItem('praefixe', '1');
+  } catch { return; }
+  if (projekte.length) return;
+
+  const teile = t => t.title.match(/^(.{2,40}?)\s+[-–—]\s+(.+)$/);
+  const zaehler = new Map();
+  for (const t of tasks) {
+    const m = teile(t);
+    if (m) { const k = m[1].trim().toLowerCase(); zaehler.set(k, (zaehler.get(k) || 0) + 1); }
+  }
+  const gute = new Set([...zaehler].filter(([, n]) => n >= 2).map(([k]) => k));
+  if (!gute.size) return;
+
+  const vorher = tasks.map(t => ({ id: t.id, title: t.title, projekt: t.projekt }));
+  let n = 0;
+  for (const t of tasks) {
+    const m = teile(t);
+    if (!m || !gute.has(m[1].trim().toLowerCase())) continue;
+    const p = await projektAnlegen(m[1].trim());
+    if (!p) continue;
+    t.projekt = p.id;
+    t.title = m[2].trim();
+    n++;
+  }
+  if (!n) return;
+  await tx('tasks', s => tasks.forEach(t => s.put(t))).catch(() => {});
+  offerUndo(`${n} Titel auf ${pl(projekte.length, 'Projekt', 'Projekte')} verteilt`, async () => {
+    for (const v of vorher) { const t = byId(v.id); if (t) { t.title = v.title; t.projekt = v.projekt; } }
+    projekte = [];
+    await tx('projects', s => s.clear()).catch(() => {});
+    await tx('tasks', s => tasks.forEach(t => s.put(t))).catch(() => {});
+    render();
+  });
+}
+
+function projekteFuellen() {
+  const opt = (v, t, sel) => `<option value="${v}"${sel ? ' selected' : ''}>${esc(t)}</option>`;
+  $('#newproj').innerHTML = opt('', '— Projekt —', !neuProj)
+    + projekte.map(p => opt(p.id, p.name, p.id === neuProj)).join('') + opt('+', '＋ neues …');
+  $('#projfilter').innerHTML = opt('', 'Alle Projekte', !projFilter)
+    + projekte.map(p => opt(p.id, p.name, p.id === projFilter)).join('');
+}
+
+$('#newproj').addEventListener('change', async e => {
+  if (e.target.value === '+') {
+    const name = prompt('Name des neuen Projekts:');
+    const p = name ? await projektAnlegen(name) : null;
+    neuProj = p ? p.id : '';
+  } else neuProj = e.target.value;
+  try { localStorage.setItem('neuProj', neuProj); } catch { /* egal */ }
+  projekteFuellen();
+  titleIn.focus();
+});
+
+$('#projfilter').addEventListener('change', e => { projFilter = e.target.value; render(); });
+
+/* ------------------------------------------------------- Karten verschieben --- */
+
+let kandidat = null, zug = null;
+
+board.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || e.target.closest('button,input,textarea,select,a,.subs')) return;
+  const karte = e.target.closest('.card');
+  if (!karte) return;
+  kandidat = { karte, id: karte.dataset.id, x: e.clientX, y: e.clientY };
+});
+
+document.addEventListener('pointermove', e => {
+  if (kandidat && !zug && Math.abs(e.clientX - kandidat.x) + Math.abs(e.clientY - kandidat.y) > 5) starteZug(e);
+  if (!zug) return;
+  e.preventDefault();
+  zug.el.style.transform = `translate(${e.clientX - zug.dx}px, ${e.clientY - zug.dy}px)`;
+  platzSuchen(e.clientX, e.clientY);
+});
+
+document.addEventListener('pointerup', () => { if (zug) zugBeenden(); kandidat = null; });
+
+function starteZug(e) {
+  const { karte, id } = kandidat;
+  const r = karte.getBoundingClientRect();
+  const platz = document.createElement('div');
+  platz.className = 'platz';
+  platz.style.height = r.height + 'px';
+  karte.after(platz);
+
+  zug = { id, el: karte, platz, dx: e.clientX - r.left, dy: e.clientY - r.top };
+  Object.assign(karte.style, {
+    position: 'fixed', left: '0', top: '0', width: r.width + 'px',
+    transform: `translate(${r.left}px, ${r.top}px)`, zIndex: '50', pointerEvents: 'none',
+  });
+  karte.classList.add('zieht');
+  document.body.appendChild(karte);
+}
+
+function platzSuchen(x, y) {
+  const spalte = [...board.querySelectorAll('.col')].find(c => {
+    const r = c.getBoundingClientRect();
+    return x >= r.left && x <= r.right;
+  });
+  if (!spalte) return;
+  const kasten = spalte.querySelector('.cards');
+  let vor = null;
+  for (const k of kasten.querySelectorAll('.card')) {
+    const r = k.getBoundingClientRect();
+    if (y < r.top + r.height / 2) { vor = k; break; }
+  }
+  if (vor) kasten.insertBefore(zug.platz, vor); else kasten.appendChild(zug.platz);
+}
+
+function zugBeenden() {
+  const kasten = zug.platz.closest('.cards');
+  const neuStatus = kasten ? kasten.dataset.col : null;
+  const index = [...kasten.children].filter(el => el.classList.contains('card') || el === zug.platz).indexOf(zug.platz);
+
+  zug.el.remove();
+  zug.platz.remove();
+  const t = byId(zug.id);
+  zug = null;
+  if (!t || !neuStatus) return render();
+
+  setStatus(t, neuStatus);
+  const spalte = sichtbar().filter(x => statusVon(x) === neuStatus && x.id !== t.id).sort(order);
+  spalte.splice(Math.max(0, index), 0, t);
+  spalte.forEach((x, i) => { x.ord = (i + 1) * 1000; x.updated = Date.now(); });
+
+  if (sort !== 'manuell') {                       // Ziehen heißt: ab jetzt eigene Reihenfolge
+    sort = 'manuell';
+    $('#sort').value = 'manuell';
+    try { localStorage.setItem('sort', sort); } catch { /* egal */ }
+  }
+  tx('tasks', s => spalte.forEach(x => s.put(x))).catch(e => notify('Nicht gespeichert: ' + e));
+  render();
+}
 
 /* =============================================================== TEXT ====== */
 
@@ -1341,6 +1612,10 @@ const cleanTask = t => ({
   title: String(t.title).slice(0, 500),
   note: typeof t.note === 'string' ? t.note : '',
   done: !!t.done,
+  status: ['open', 'doing', 'done'].includes(t.status) ? t.status : (t.done ? 'done' : 'open'),
+  projekt: typeof t.projekt === 'string' ? t.projekt : '',
+  parent: typeof t.parent === 'string' ? t.parent : null,
+  ord: Number(t.ord) || Number(t.created) || Date.now(),
   prio: [0, 1, 2].includes(t.prio) ? t.prio : 0,
   due: /^\d{4}-\d{2}-\d{2}$/.test(t.due) ? t.due : '',
   created: Number(t.created) || Date.now(),
@@ -1380,7 +1655,7 @@ $('#export').addEventListener('click', async () => {
   const bilder = [];
   for (const i of (await all('images')) || [])
     bilder.push({ id: i.id, data: await toDataURL(i.blob) });
-  download(JSON.stringify({ app: 'aufgaben', version: 3, tasks, docs, diagrams: dias, images: bilder }, null, 1),
+  download(JSON.stringify({ app: 'aufgaben', version: 4, tasks, projects: projekte, docs, diagrams: dias, images: bilder }, null, 1),
            `sicherung-${todayISO()}.json`);
   notify(`${pl(tasks.length, 'Aufgabe', 'Aufgaben')}, ${pl(docs.length, 'Dokument', 'Dokumente')}, ${pl(dias.length, 'Diagramm', 'Diagramme')}, ${pl(bilder.length, 'Bild', 'Bilder')} gesichert`);
 });
@@ -1398,6 +1673,12 @@ $('#import').addEventListener('change', async e => {
     const gRows = (alt ? [] : data.diagrams || []).filter(g => g && Array.isArray(g.nodes)).map(cleanDia);
     if (!tRows.length && !dRows.length && !gRows.length) throw new Error('nichts Brauchbares enthalten');
 
+    const pRows = (alt ? [] : data.projects || []).filter(p => p && typeof p.name === 'string').map(p => ({
+      id: typeof p.id === 'string' && p.id ? p.id : crypto.randomUUID(),
+      name: String(p.name).slice(0, 60),
+      color: /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : FARBEN[0],
+    }));
+    if (pRows.length) await tx('projects', s => pRows.forEach(p => s.put(p)));
     if (tRows.length) await tx('tasks', s => tRows.forEach(t => s.put(t)));
     if (dRows.length) await tx('docs',  s => dRows.forEach(d => s.put(d)));
     if (gRows.length) await tx('diagrams', s => gRows.forEach(g => s.put(g)));
@@ -1407,6 +1688,7 @@ $('#import').addEventListener('change', async e => {
     }
 
     tasks = await all('tasks');
+    projekte = await all('projects');
     docs = await all('docs');
     dias = await all('diagrams');
     curDoc = null; curDia = null;
@@ -1489,9 +1771,14 @@ function fail(err) {
 
 openDB().then(async handle => {
   db = handle;
-  tasks = (await all('tasks')).map(t => ({ note: '', due: '', prio: 0, ...t }));
+  tasks = (await all('tasks')).map(t => ({
+    note: '', due: '', prio: 0, projekt: '', parent: null,
+    status: t.done ? 'done' : 'open', ord: t.created || Date.now(), ...t,
+  }));
   docs  = (await all('docs')).map(d => ({ title: '', html: '', ...d }));
   dias  = (await all('diagrams')).map(d => ({ title: '', nodes: [], edges: [], ...d }));
+  projekte = await all('projects');
+  await praefixeUebernehmen();
 
   try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch { /* egal */ }
 
@@ -1504,6 +1791,7 @@ openDB().then(async handle => {
     letztes = localStorage.getItem('lastDoc');
     letztesDia = localStorage.getItem('lastDia');
     reiter = localStorage.getItem('tab') || 'tasks';
+    neuProj = localStorage.getItem('neuProj') || '';
     const s = localStorage.getItem('sort');
     if (SORTEN[s]) { sort = s; $('#sort').value = s; render(); }
   } catch { /* egal */ }
