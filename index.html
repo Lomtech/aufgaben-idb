@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aufgaben &amp; Text</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>✓</text></svg>">
+</head>
+<body data-tab="tasks">
+
+<main>
+  <header>
+    <nav class="maintabs" aria-label="Bereich">
+      <button type="button" data-tab="tasks" class="on">Aufgaben</button>
+      <button type="button" data-tab="text">Text</button>
+    </nav>
+    <span id="count"></span>
+  </header>
+
+  <!-- ------------------------------------------------------------ Aufgaben -->
+  <section id="v-tasks">
+    <form id="new" autocomplete="off">
+      <input id="title" placeholder="Neue Aufgabe …" maxlength="500" autofocus>
+      <button type="submit" title="Hinzufügen" aria-label="Hinzufügen">+</button>
+    </form>
+
+    <div class="bar">
+      <div class="tabs" role="group" aria-label="Filter">
+        <button type="button" data-f="open" class="on">Offen</button>
+        <button type="button" data-f="all">Alle</button>
+        <button type="button" data-f="done">Erledigt</button>
+      </div>
+      <input id="q" type="search" placeholder="Suchen" autocomplete="off" aria-label="Aufgaben suchen">
+    </div>
+
+    <ul id="list"></ul>
+    <p id="empty" hidden></p>
+  </section>
+
+  <!-- ---------------------------------------------------------------- Text -->
+  <section id="v-text" hidden>
+    <div class="doclayout">
+      <aside class="docs">
+        <button type="button" id="newdoc">＋ Neues Dokument</button>
+        <input id="docq" type="search" placeholder="Dokumente suchen" autocomplete="off" aria-label="Dokumente suchen">
+        <ul id="doclist"></ul>
+      </aside>
+
+      <div class="editor" id="editor">
+        <input id="doctitle" placeholder="Titel des Dokuments" maxlength="200" autocomplete="off">
+
+        <div class="toolbar" id="toolbar" role="toolbar" aria-label="Formatierung">
+          <button type="button" data-cmd="h1" title="Überschrift 1 (⌘1)">H1</button>
+          <button type="button" data-cmd="h2" title="Überschrift 2 (⌘2)">H2</button>
+          <button type="button" data-cmd="h3" title="Überschrift 3 (⌘3)">H3</button>
+          <button type="button" data-cmd="p" title="Fließtext (⌘0)">Text</button>
+          <span class="sep"></span>
+          <button type="button" data-cmd="bold" title="Fett (⌘B)"><b>B</b></button>
+          <button type="button" data-cmd="italic" title="Kursiv (⌘I)"><i>K</i></button>
+          <button type="button" data-cmd="code" title="Code im Text">&lt;/&gt;</button>
+          <span class="sep"></span>
+          <button type="button" data-cmd="ul" title="Aufzählung">• Liste</button>
+          <button type="button" data-cmd="ol" title="Nummeriert">1. Liste</button>
+          <button type="button" data-cmd="quote" title="Zitat">Zitat</button>
+          <button type="button" data-cmd="pre" title="Code-Block">Code-Block</button>
+          <button type="button" data-cmd="hr" title="Trennlinie">Linie</button>
+        </div>
+
+        <div id="doc" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"
+             aria-label="Dokumentinhalt"
+             data-placeholder="Schreiben … Screenshot mit ⌘V einfügen oder Bild hineinziehen."></div>
+
+        <div class="docfoot"><span id="words"></span><span id="saved"></span></div>
+      </div>
+    </div>
+
+    <p id="nodocs" hidden>Noch kein Dokument – links auf <b>Neues Dokument</b> klicken.</p>
+  </section>
+
+  <footer>
+    <div class="acts">
+      <button type="button" id="purge">Erledigte löschen</button>
+      <button type="button" id="exportdoc">Dokument als HTML</button>
+      <button type="button" id="export">Sichern</button>
+      <label class="file" tabindex="0">Laden<input type="file" id="import" accept="application/json,.json" hidden></label>
+    </div>
+    <p class="keys" id="keys-tasks"><kbd>N</kbd> neu · <kbd>/</kbd> suchen · <kbd>Enter</kbd> speichern · <kbd>Esc</kbd> abbrechen</p>
+    <p class="keys" id="keys-text" hidden><kbd>⌘1</kbd>–<kbd>⌘3</kbd> Überschrift · <kbd>⌘0</kbd> Text · <kbd>⌘B</kbd> fett · <kbd>⌘V</kbd> Screenshot · speichert selbst</p>
+  </footer>
+</main>
+
+<div id="toast" hidden><span></span><button type="button" id="undo">Rückgängig</button></div>
+
+<noscript><p class="fail">Diese Seite braucht JavaScript.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>
