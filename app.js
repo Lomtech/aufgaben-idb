@@ -2169,7 +2169,10 @@ openDB().then(async handle => {
 
   try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch { /* egal */ }
 
-  render();
+  let gemerkteAnsicht = 'tabelle';
+  try { gemerkteAnsicht = localStorage.getItem('ansicht') || 'tabelle'; } catch { /* egal */ }
+  setAnsicht(gemerkteAnsicht);
+
   renderDocs();
   renderDiaList();
 

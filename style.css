@@ -136,6 +136,72 @@ main>section{flex:1;min-height:0;display:flex;flex-direction:column}
 
 /* ------------------------------------------------------------------ Liste --- */
 
+/* ---------------------------------------------------------------- Tabelle --- */
+
+body[data-view="tabelle"] .board,
+body[data-view="tabelle"] #sort,
+body[data-view="brett"] .gridwrap{display:none}
+
+.gridwrap{
+  flex:1;min-height:240px;margin-top:12px;overflow:auto;
+  border:1px solid var(--line);border-radius:11px;background:var(--bg);
+}
+.grid{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:13px}
+
+.grid th{
+  position:sticky;top:0;z-index:2;
+  padding:7px 9px;text-align:left;font-size:12px;font-weight:600;color:var(--muted);
+  background:var(--soft);border-bottom:1px solid var(--line);border-right:1px solid var(--line);
+  white-space:nowrap;cursor:pointer;user-select:none;
+}
+.grid th:hover{color:var(--text)}
+.grid th.sortiert{color:var(--accent)}
+.grid th .griff{
+  position:absolute;top:0;right:-3px;width:7px;height:100%;cursor:col-resize;
+}
+.grid th .griff:hover{background:var(--accent);opacity:.35}
+
+.grid td{
+  padding:5px 9px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);
+  vertical-align:top;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.grid td.z{cursor:cell}
+.grid td.ro{color:var(--muted);background:#fcfcfd}
+.grid tr:hover td{background:#fafbfd}
+.grid tr.markiert td{background:#eaf0ff}
+.grid tr.erledigt td:nth-child(2){color:var(--muted);text-decoration:line-through;text-decoration-color:#c9cdd5}
+.grid tr.kind td:nth-child(2){padding-left:26px;color:#5c636e}
+.grid tr.kind td:nth-child(2)::before{content:'└ ';color:#b9bfc9}
+
+.grid .nr{
+  position:sticky;left:0;z-index:1;width:38px;
+  padding:5px 6px;text-align:right;font-size:11px;color:#a8aeb9;
+  background:var(--soft);border-right:1px solid var(--line);
+  font-variant-numeric:tabular-nums;cursor:pointer;user-select:none;
+}
+.grid th.nr{z-index:3}
+.grid tr:hover .nr{color:var(--muted)}
+.grid tr.markiert .nr{background:#dce6ff;color:var(--accent)}
+
+.grid td.aktiv{
+  outline:2px solid var(--accent);outline-offset:-2px;background:#fff;
+  overflow:visible;white-space:normal;
+}
+.grid .zf{
+  width:100%;padding:1px 2px;font:inherit;
+  background:var(--bg);border:0;border-radius:0;outline:none;
+}
+.grid tr.neu td{color:#b9bfc9;cursor:text;background:#fcfcfd}
+.grid tr.neu:hover td{color:var(--muted)}
+
+.grid .stat{font-size:11.5px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);background:var(--soft)}
+.grid .stat.s-doing{color:#b26a00;background:#fdf8ee;border-color:#f0dcb8}
+.grid .stat.s-done{color:#1f9d63;background:#f0faf4;border-color:#cfe9da}
+.grid .pz{font-size:11.5px;font-weight:600}
+.grid .pz.p1{color:var(--p1)}
+.grid .pz.p2{color:var(--p2)}
+.grid .chip{max-width:none}
+
 /* ------------------------------------------------------------------ Brett --- */
 
 .board{display:flex;gap:14px;align-items:stretch;margin-top:12px;flex:1;min-height:340px}
