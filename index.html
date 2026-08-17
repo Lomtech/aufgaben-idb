@@ -9,53 +9,67 @@
 </head>
 <body data-tab="tasks">
 
-<main>
-  <header>
-    <nav class="maintabs" aria-label="Bereich">
-      <button type="button" data-tab="tasks" class="on">Aufgaben</button>
-      <button type="button" data-tab="text">Text</button>
-      <button type="button" data-tab="dia">Diagramme</button>
-    </nav>
-    <span id="count"></span>
-  </header>
+<div class="app">
 
-  <!-- ------------------------------------------------------------ Aufgaben -->
-  <section id="v-tasks">
-    <form id="new" autocomplete="off">
-      <input id="title" placeholder="Neue Aufgabe …" maxlength="500" autofocus>
-      <button type="submit" title="Hinzufügen" aria-label="Hinzufügen">+</button>
-    </form>
-
-    <div class="bar">
-      <div class="tabs" role="group" aria-label="Filter">
-        <button type="button" data-f="open" class="on">Offen</button>
-        <button type="button" data-f="all">Alle</button>
-        <button type="button" data-f="done">Erledigt</button>
-      </div>
-      <input id="q" type="search" placeholder="Suchen" autocomplete="off" aria-label="Aufgaben suchen">
-      <select id="sort" aria-label="Sortierung" title="Sortierung">
-        <option value="smart">Priorität &amp; Fälligkeit</option>
-        <option value="new">Neueste zuerst</option>
-        <option value="old">Älteste zuerst</option>
-        <option value="touched">Zuletzt geändert</option>
-        <option value="az">Name A–Z</option>
-        <option value="za">Name Z–A</option>
-      </select>
+  <!-- ------------------------------------------------------------- Leiste -->
+  <nav class="rail" aria-label="Bereiche">
+    <div class="maintabs">
+      <button type="button" data-tab="tasks" class="on"><span>Aufgaben</span><b id="c-tasks"></b></button>
+      <button type="button" data-tab="text"><span>Text</span><b id="c-text"></b></button>
+      <button type="button" data-tab="dia"><span>Diagramme</span><b id="c-dia"></b></button>
     </div>
 
-    <ul id="list"></ul>
-    <p id="empty" hidden></p>
-  </section>
+    <div class="railsec" id="rail-text" hidden>
+      <button type="button" class="neu" id="newdoc">＋ Neues Dokument</button>
+      <input id="docq" type="search" placeholder="Dokumente suchen" autocomplete="off" aria-label="Dokumente suchen">
+      <ul id="doclist"></ul>
+    </div>
 
-  <!-- ---------------------------------------------------------------- Text -->
-  <section id="v-text" hidden>
-    <div class="doclayout">
-      <aside class="docs">
-        <button type="button" id="newdoc">＋ Neues Dokument</button>
-        <input id="docq" type="search" placeholder="Dokumente suchen" autocomplete="off" aria-label="Dokumente suchen">
-        <ul id="doclist"></ul>
-      </aside>
+    <div class="railsec" id="rail-dia" hidden>
+      <button type="button" class="neu" id="newdia">＋ Neues Diagramm</button>
+      <ul id="dialist"></ul>
+    </div>
 
+    <div class="railfoot">
+      <button type="button" id="purge">Erledigte löschen</button>
+      <button type="button" id="exportdoc">Dokument als HTML</button>
+      <button type="button" id="exportsvg">Diagramm als SVG</button>
+      <button type="button" id="export">Sichern</button>
+      <label class="file" tabindex="0">Laden<input type="file" id="import" accept="application/json,.json" hidden></label>
+    </div>
+  </nav>
+
+  <!-- ------------------------------------------------------------- Inhalt -->
+  <main>
+
+    <section id="v-tasks">
+      <form id="new" autocomplete="off">
+        <input id="title" placeholder="Neue Aufgabe …" maxlength="500" autofocus>
+        <button type="submit" title="Hinzufügen" aria-label="Hinzufügen">+</button>
+      </form>
+
+      <div class="bar">
+        <div class="tabs" role="group" aria-label="Filter">
+          <button type="button" data-f="open" class="on">Offen</button>
+          <button type="button" data-f="all">Alle</button>
+          <button type="button" data-f="done">Erledigt</button>
+        </div>
+        <input id="q" type="search" placeholder="Suchen" autocomplete="off" aria-label="Aufgaben suchen">
+        <select id="sort" aria-label="Sortierung" title="Sortierung">
+          <option value="smart">Priorität &amp; Fälligkeit</option>
+          <option value="new">Neueste zuerst</option>
+          <option value="old">Älteste zuerst</option>
+          <option value="touched">Zuletzt geändert</option>
+          <option value="az">Name A–Z</option>
+          <option value="za">Name Z–A</option>
+        </select>
+      </div>
+
+      <ul id="list"></ul>
+      <p id="empty" hidden></p>
+    </section>
+
+    <section id="v-text" hidden>
       <div class="editor" id="editor">
         <input id="doctitle" placeholder="Titel des Dokuments" maxlength="200" autocomplete="off">
 
@@ -82,19 +96,10 @@
 
         <div class="docfoot"><span id="words"></span><span id="saved"></span></div>
       </div>
-    </div>
+      <p id="nodocs" hidden>Noch kein Dokument – links auf <b>Neues Dokument</b> klicken.</p>
+    </section>
 
-    <p id="nodocs" hidden>Noch kein Dokument – links auf <b>Neues Dokument</b> klicken.</p>
-  </section>
-
-  <!-- ----------------------------------------------------------- Diagramme -->
-  <section id="v-dia" hidden>
-    <div class="doclayout">
-      <aside class="docs">
-        <button type="button" id="newdia">＋ Neues Diagramm</button>
-        <ul id="dialist"></ul>
-      </aside>
-
+    <section id="v-dia" hidden>
       <div class="editor" id="diaeditor">
         <input id="diatitle" placeholder="Titel des Diagramms" maxlength="200" autocomplete="off">
 
@@ -108,7 +113,7 @@
           <button type="button" id="dia-dash" title="Pfeilart der Auswahl wechseln">Gestrichelt</button>
           <button type="button" id="dia-del" title="Auswahl löschen (Entf)">Löschen</button>
           <span class="sep"></span>
-          <button type="button" id="dia-insert" title="Als Bild ins offene Dokument">Ins Dokument</button>
+          <button type="button" id="dia-insert" title="An der letzten Cursorstelle im Dokument">Ins Dokument</button>
         </div>
 
         <div class="canvas" id="canvas"></div>
@@ -118,24 +123,15 @@
           <span id="diasaved"></span>
         </div>
       </div>
-    </div>
+      <p id="nodias" hidden>Noch kein Diagramm – links auf <b>Neues Diagramm</b> klicken.</p>
+    </section>
 
-    <p id="nodias" hidden>Noch kein Diagramm – links auf <b>Neues Diagramm</b> klicken.</p>
-  </section>
-
-  <footer>
-    <div class="acts">
-      <button type="button" id="purge">Erledigte löschen</button>
-      <button type="button" id="exportdoc">Dokument als HTML</button>
-      <button type="button" id="exportsvg">Diagramm als SVG</button>
-      <button type="button" id="export">Sichern</button>
-      <label class="file" tabindex="0">Laden<input type="file" id="import" accept="application/json,.json" hidden></label>
-    </div>
     <p class="keys" id="keys-tasks"><kbd>N</kbd> neu · <kbd>/</kbd> suchen · <kbd>Enter</kbd> speichern · <kbd>Esc</kbd> abbrechen</p>
     <p class="keys" id="keys-text" hidden><kbd>⌘1</kbd>–<kbd>⌘3</kbd> Überschrift · <kbd>⌘0</kbd> Text · <kbd>⌘B</kbd> fett · <kbd>⌘V</kbd> Screenshot · <kbd>⌘↩</kbd> raus aus Code-Block · speichert selbst</p>
     <p class="keys" id="keys-dia" hidden><kbd>Entf</kbd> löschen · <kbd>Esc</kbd> Auswahl aufheben · <kbd>↩</kbd> beschriften · speichert selbst</p>
-  </footer>
-</main>
+
+  </main>
+</div>
 
 <div id="toast" hidden><span></span><button type="button" id="undo">Rückgängig</button></div>
 

@@ -172,17 +172,10 @@ function render() {
 }
 
 function updateCount() {
-  const el = $('#count');
-  if (tab === 'text') {
-    el.textContent = docs.length ? pl(docs.length, 'Dokument', 'Dokumente') : '';
-    return;
-  }
-  if (tab === 'dia') {
-    el.textContent = dias.length ? pl(dias.length, 'Diagramm', 'Diagramme') : '';
-    return;
-  }
   const offen = tasks.reduce((n, t) => n + (t.done ? 0 : 1), 0);
-  el.textContent = !tasks.length ? '' : offen ? `${offen} offen` : 'alles erledigt';
+  $('#c-tasks').textContent = offen || '';
+  $('#c-text').textContent = docs.length || '';
+  $('#c-dia').textContent = dias.length || '';
 }
 
 /* Cursor überlebt das Neuzeichnen der Liste. */
@@ -397,6 +390,7 @@ async function openDoc(id) {
   if (!curDoc) { renderDocs(); return; }
 
   docTitle.value = curDoc.title;
+  letzteStelle = null;                                  // Bereich aus dem alten Dokument wäre ungültig
   editor.innerHTML = curDoc.html || '';
   const geflickt = repair(editor);
   ensureTail();
@@ -754,7 +748,15 @@ editor.addEventListener('keydown', e => {
   }
 });
 
-document.addEventListener('selectionchange', () => later('tb', 40, syncToolbar));
+/* Letzte Cursorstelle im Dokument merken – daran hängt das Einfügen von
+   Diagrammen, nachdem man zwischendurch im Reiter Diagramme war. */
+let letzteStelle = null;
+
+document.addEventListener('selectionchange', () => {
+  const s = getSelection();
+  if (s && s.rangeCount && editor.contains(s.anchorNode)) letzteStelle = s.getRangeAt(0).cloneRange();
+  later('tb', 40, syncToolbar);
+});
 
 $('#toolbar').addEventListener('mousedown', e => {
   const b = e.target.closest('button');
@@ -1096,29 +1098,58 @@ $('#dialist').addEventListener('click', e => {
 
 /* --- Ins Dokument einbetten ----------------------------------------------- */
 
+/* Steht der Cursor auf einer Einbettung dieses Diagramms? Nur dann wird
+   überschrieben – eine Zeile weiter unten kommt bewusst ein zweites Bild. */
+function einbettungAmCursor(sel) {
+  const r = letzteStelle;
+  if (!r || !editor.contains(r.startContainer)) return null;
+  const passt = k => k && k.nodeType === 1 && k.matches && k.matches(sel);
+
+  if (r.startContainer.nodeType === 1) {                    // Cursor direkt neben dem Bild
+    const kinder = r.startContainer.childNodes;
+    for (const i of [r.startOffset, r.startOffset - 1]) if (passt(kinder[i])) return kinder[i];
+  }
+  const el = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+  if (passt(el)) return el;
+
+  const block = el && el.closest ? el.closest('#doc > *') : null;   // gleicher Absatz
+  if (block) return passt(block) ? block : block.querySelector(sel);
+  return null;
+}
+
 $('#dia-insert').addEventListener('click', async () => {
   if (!curDia || !curDia.nodes.length) return notify('Diagramm ist leer');
-  if (!docs.length) return notify('Erst ein Dokument im Reiter Text anlegen');
+  if (!curDoc) return notify('Erst ein Dokument im Reiter Text anlegen');
   flushDia();
 
   const id = 'dia:' + curDia.id;
+  const wahl = `img[data-img="${id}"]`;
   const blob = new Blob([svgOf(curDia)], { type: 'image/svg+xml' });
   await tx('images', s => s.put({ id, blob })).catch(e => notify('Nicht gespeichert: ' + e));
+
   if (imgUrls.has(id)) URL.revokeObjectURL(imgUrls.get(id));
   const url = URL.createObjectURL(blob);
   imgUrls.set(id, url);
+  editor.querySelectorAll(wahl).forEach(el => { el.src = url; });   // alle Kopien aktuell halten
 
+  const treffer = einbettungAmCursor(wahl);
   setTab('text');
-  const vorhanden = editor.querySelector(`img[data-img="${id}"]`);
-  if (vorhanden) {
-    vorhanden.src = url;
-    notify('Diagramm im Dokument aktualisiert');
+
+  if (treffer) {
+    notify('Diagramm an der Cursorstelle aktualisiert');
   } else {
-    ensureTail();
     editor.focus();
-    caretToEnd(editor.lastElementChild);
-    exec('insertHTML', `<img data-img="${id}" src="${url}" alt="${esc(curDia.title || 'Diagramm')}"><p><br></p>`);
-    notify('Diagramm ins Dokument eingefügt');
+    const s = getSelection();
+    if (letzteStelle && editor.contains(letzteStelle.startContainer)) {
+      s.removeAllRanges();
+      s.addRange(letzteStelle);                              // dort einfügen, wo zuletzt geschrieben wurde
+    } else {
+      ensureTail();
+      caretToEnd(editor.lastElementChild);
+    }
+    exec('insertHTML', `<img data-img="${id}" src="${url}" alt="${esc(curDia.title || 'Diagramm')}">`);
+    ensureTail();
+    notify('Diagramm an der Cursorstelle eingefügt');
   }
   touch(); flushDoc();
 });
@@ -1140,6 +1171,8 @@ function setTab(name) {
   for (const v of ['tasks', 'text', 'dia']) {
     $('#v-' + v).hidden = v !== name;
     $('#keys-' + v).hidden = v !== name;
+    const leiste = $('#rail-' + v);
+    if (leiste) leiste.hidden = v !== name;
   }
   updateCount();
   try { localStorage.setItem('tab', name); } catch { /* egal */ }
