@@ -24,6 +24,8 @@ let projekte = [];          // { id, name, color }
 let projFilter = '';        // Filter über dem Brett
 let neuProj = '';           // Projekt für neue Aufgaben
 let neueSpalte = 'open';    // Spalte für neue Aufgaben (über das ＋ einer Spalte gesetzt)
+let ansicht = 'tabelle';    // 'tabelle' oder 'brett'
+let breiten = {};           // gezogene Spaltenbreiten der Tabelle
 let editing = null;    // id, deren Titel gerade im Eingabefeld hängt
 let openId = null;     // id, deren Detailbereich offen ist
 let curDoc = null;     // offenes Dokument
@@ -219,6 +221,11 @@ function sichtbar() {
 }
 
 function render() {
+  if (ansicht === 'tabelle') return renderTabelle();
+  renderBrett();
+}
+
+function renderBrett() {
   const focus = grabFocus();
   const alle = sichtbar();
 
@@ -242,6 +249,145 @@ function render() {
 }
 
 const statusVon = t => t.status || (t.done ? 'done' : 'open');
+
+/* ============================================================= TABELLE ===== */
+/* Raster wie in einer Tabellenkalkulation: jede Zelle einzeln bearbeitbar,
+   Pfeiltasten bewegen die aktive Zelle, Spaltenköpfe sortieren, Breiten
+   lassen sich ziehen, Kopieren/Einfügen läuft über Tabulator-Text. */
+
+const gitter = $('#grid'), gitterRahmen = $('#gridwrap');
+
+const SP = [
+  { k: 'title',   n: 'Aufgabe',  w: 360, typ: 'text' },
+  { k: 'projekt', n: 'Projekt',  w: 140, typ: 'proj' },
+  { k: 'status',  n: 'Status',   w: 108, typ: 'status' },
+  { k: 'prio',    n: 'Prio',     w: 84,  typ: 'prio' },
+  { k: 'due',     n: 'Fällig',   w: 116, typ: 'date' },
+  { k: 'sub',     n: 'Unter',    w: 66,  typ: 'ro' },
+  { k: 'note',    n: 'Notiz',    w: 260, typ: 'text' },
+  { k: 'created', n: 'Angelegt', w: 122, typ: 'ro' },
+];
+
+const STATUS_NAME = { open: 'Offen', doing: 'In Arbeit', done: 'Erledigt' };
+
+let tabSort = { k: 'ord', ab: false };
+let aktiv = null;            // { id, k } – aktive Zelle
+let bearbeitet = false;      // aktive Zelle im Bearbeitungsmodus
+let markiert = new Set();    // markierte Zeilen (id)
+let letzteZeile = null;      // für Umschalt-Klick
+
+const SORTWERT = {
+  ord:     t => t.ord ?? t.created,
+  title:   t => t.title.toLowerCase(),
+  projekt: t => (projekt(t.projekt)?.name || '￿').toLowerCase(),
+  status:  t => ['open', 'doing', 'done'].indexOf(statusVon(t)),
+  prio:    t => -t.prio,
+  due:     t => t.due || '9999-99-99',
+  sub:     t => kinderVon(t.id).length,
+  note:    t => t.note.toLowerCase(),
+  created: t => t.created,
+};
+
+function tabCmp(a, b) {
+  const f = SORTWERT[tabSort.k] || SORTWERT.ord;
+  const x = f(a), y = f(b);
+  const c = x < y ? -1 : x > y ? 1 : 0;
+  return tabSort.ab ? -c : c;
+}
+
+/* Anzeigewert einer Zelle */
+function zellText(t, k) {
+  switch (k) {
+    case 'title':   return t.title;
+    case 'projekt': return projekt(t.projekt)?.name || '';
+    case 'status':  return STATUS_NAME[statusVon(t)];
+    case 'prio':    return ['', 'Mittel', 'Hoch'][t.prio];
+    case 'due':     return t.due ? fmtDue(t.due) : '';
+    case 'sub':     { const k2 = kinderVon(t.id); return k2.length ? `${k2.filter(x => x.done).length}/${k2.length}` : ''; }
+    case 'note':    return t.note;
+    case 'created': return fmtWhen(t.created);
+  }
+  return '';
+}
+
+/* Rohwert fürs Kopieren – da will man das Datum, nicht „morgen“. */
+function rohText(t, k) {
+  if (k === 'due') return t.due || '';
+  if (k === 'created') return new Date(t.created).toISOString().slice(0, 10);
+  return zellText(t, k);
+}
+
+function zelle(t, sp) {
+  const ist = aktiv && aktiv.id === t.id && aktiv.k === sp.k;
+  const bearbeitbar = sp.typ !== 'ro';
+  if (ist && bearbeitet && bearbeitbar) return `<td class="z aktiv" data-k="${sp.k}">${feld(t, sp)}</td>`;
+
+  const inhalt = sp.k === 'projekt' && t.projekt
+    ? `<span class="chip" style="--c:${projekt(t.projekt).color}">${esc(zellText(t, sp.k))}</span>`
+    : sp.k === 'due' && t.due
+      ? `<span class="due-badge ${dayDiff(t.due) < 0 && !t.done ? 'over' : dayDiff(t.due) === 0 ? 'today' : ''}">${esc(zellText(t, sp.k))}</span>`
+      : sp.k === 'title' ? schmuck(t.title)
+      : sp.k === 'status' ? `<span class="stat s-${statusVon(t)}">${esc(zellText(t, sp.k))}</span>`
+      : sp.k === 'prio' && t.prio ? `<span class="pz p${t.prio}">${esc(zellText(t, sp.k))}</span>`
+      : esc(zellText(t, sp.k));
+
+  return `<td class="z${ist ? ' aktiv' : ''}${bearbeitbar ? '' : ' ro'}" data-k="${sp.k}">${inhalt}</td>`;
+}
+
+function feld(t, sp) {
+  if (sp.typ === 'proj') return `<select class="zf" data-k="${sp.k}">
+      <option value=""${!t.projekt ? ' selected' : ''}>—</option>
+      ${projekte.map(p => `<option value="${p.id}"${p.id === t.projekt ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
+      <option value="+">＋ neues …</option></select>`;
+  if (sp.typ === 'status') return `<select class="zf" data-k="${sp.k}">
+      ${Object.entries(STATUS_NAME).map(([v, n]) => `<option value="${v}"${statusVon(t) === v ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+  if (sp.typ === 'prio') return `<select class="zf" data-k="${sp.k}">
+      ${['—', 'Mittel', 'Hoch'].map((n, i) => `<option value="${i}"${t.prio === i ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+  if (sp.typ === 'date') return `<input class="zf" type="date" data-k="${sp.k}" value="${t.due}">`;
+  return `<input class="zf" data-k="${sp.k}" value="${esc(t[sp.k] || '')}" maxlength="500">`;
+}
+
+/* Elternaufgaben sortiert, Unteraufgaben direkt darunter eingerückt. */
+function tabZeilen() {
+  const eltern = sichtbar().sort(tabCmp);
+  const raus = [];
+  for (const t of eltern) {
+    raus.push({ t, tief: 0 });
+    for (const k of kinderVon(t.id).sort((a, b) => (a.ord ?? a.created) - (b.ord ?? b.created)))
+      raus.push({ t: k, tief: 1 });
+  }
+  return raus;
+}
+
+function renderTabelle() {
+  const zeilen = tabZeilen();
+  const pfeil = k => tabSort.k === k ? (tabSort.ab ? ' ▾' : ' ▴') : '';
+
+  gitter.innerHTML = `
+    <colgroup><col style="width:38px">${SP.map(s => `<col style="width:${breiten[s.k] || s.w}px">`).join('')}</colgroup>
+    <thead><tr>
+      <th class="nr"></th>
+      ${SP.map(s => `<th data-k="${s.k}" class="${tabSort.k === s.k ? 'sortiert' : ''}">${s.n}${pfeil(s.k)}<i class="griff" data-griff="${s.k}"></i></th>`).join('')}
+    </tr></thead>
+    <tbody>
+      ${zeilen.map(({ t, tief }, i) => `<tr data-id="${t.id}" class="${markiert.has(t.id) ? 'markiert ' : ''}${statusVon(t) === 'done' ? 'erledigt ' : ''}${tief ? 'kind' : ''}">
+        <td class="nr">${i + 1}</td>
+        ${SP.map(s => zelle(t, s)).join('')}
+      </tr>`).join('')}
+      <tr class="neu"><td class="nr">＋</td><td colspan="${SP.length}">Neue Aufgabe … (hier tippen)</td></tr>
+    </tbody>`;
+
+  const leer = $('#empty');
+  leer.hidden = zeilen.length > 0;
+  leer.textContent = !tasks.length ? 'Noch nichts da – unten in der Tabelle tippen.' : 'Nichts gefunden.';
+  updateCount();
+  projekteFuellen();
+
+  if (aktiv && bearbeitet) {
+    const f = gitter.querySelector('.aktiv .zf');
+    if (f) { f.focus(); if (f.select) try { f.select(); } catch { /* egal */ } }
+  }
+}
 
 /* =============================================================== BAUM ====== */
 /* Linke Leiste: Reiter → Eintrag → Überschrift → Unterüberschrift.
