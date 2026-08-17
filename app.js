@@ -365,8 +365,11 @@ async function openDoc(id) {
 
   docTitle.value = curDoc.title;
   editor.innerHTML = curDoc.html || '';
+  const geflickt = repair(editor);
+  ensureTail();
   await bindImages();
   dirty = false;
+  if (geflickt) { dirty = true; saveDoc(); notify(`${pl(geflickt, 'verschachtelter Block', 'verschachtelte Blöcke')} aufgelöst`); }
   markEmpty(); countWords(); setSaved('gespeichert');
   renderDocs();
   try { localStorage.setItem('lastDoc', id); } catch { /* egal */ }
@@ -466,19 +469,86 @@ function countWords() {
 
 const exec = (cmd, val = null) => document.execCommand(cmd, false, val);
 const blockOf = n => (n && (n.nodeType === 3 ? n.parentElement : n));
+const istListe = t => t === 'UL' || t === 'OL';
+
+/* Der Block, in dem der Cursor steht – immer als direktes Kind des Editors. */
+function topBlock() {
+  const sel = getSelection();
+  let n = blockOf(sel && sel.anchorNode);
+  if (!n || !editor.contains(n) || n === editor) return null;
+  while (n.parentElement && n.parentElement !== editor) n = n.parentElement;
+  return n.parentElement === editor ? n : null;
+}
+
+const caretToEnd = node => {
+  const r = document.createRange();
+  r.selectNodeContents(node);
+  r.collapse(false);
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+};
+
+/* Ganz unten steht immer ein normaler Absatz – sonst sitzt man in einem
+   Code-Block oder hinter einem Bild fest und kommt nicht mehr darunter. */
+function ensureTail() {
+  const last = editor.lastElementChild;
+  if (!last || /^(PRE|BLOCKQUOTE|UL|OL|HR|IMG|FIGURE|TABLE)$/.test(last.tagName)) {
+    const p = document.createElement('p');
+    p.appendChild(document.createElement('br'));
+    editor.appendChild(p);
+  }
+}
+
+/* Aus einem Block heraus in einen neuen Absatz darunter. */
+function leaveBlock(block) {
+  const p = document.createElement('p');
+  p.appendChild(document.createElement('br'));
+  block.after(p);
+  caretToEnd(p);
+  touch(); syncToolbar();
+}
+
+/* Blockart setzen: eigener Austausch statt formatBlock – das verschachtelt
+   sonst <pre> in <pre>. Nochmal derselbe Knopf schaltet zurück auf Absatz. */
+function setBlock(tag) {
+  const block = topBlock();
+  if (!block) { exec('formatBlock', `<${tag}>`); ensureTail(); return; }
+
+  if (istListe(block.tagName)) {                       // erst aus der Liste heraus
+    exec(block.tagName === 'OL' ? 'insertOrderedList' : 'insertUnorderedList');
+    const jetzt = topBlock();
+    if (jetzt && !istListe(jetzt.tagName) && jetzt.tagName.toLowerCase() !== tag) setBlock(tag);
+    return;
+  }
+
+  const ist = block.tagName.toLowerCase();
+  const ziel = (ist === tag && (tag === 'pre' || tag === 'blockquote')) ? 'p' : tag;
+  if (ist === ziel) return;
+
+  const neu = document.createElement(ziel);
+  neu.innerHTML = ist === 'pre' ? block.innerHTML.replace(/\n/g, '<br>') : block.innerHTML;
+  if (!neu.textContent.trim() && !neu.querySelector('img,br')) neu.appendChild(document.createElement('br'));
+  block.replaceWith(neu);
+  caretToEnd(neu);
+  ensureTail();
+}
 
 function command(cmd) {
   editor.focus();
   switch (cmd) {
-    case 'h1': case 'h2': case 'h3': exec('formatBlock', `<${cmd}>`); break;
-    case 'p':     exec('formatBlock', '<p>'); break;
-    case 'pre':   exec('formatBlock', '<pre>'); break;
-    case 'quote': exec('formatBlock', '<blockquote>'); break;
+    case 'h1': case 'h2': case 'h3': case 'p': case 'pre': setBlock(cmd); break;
+    case 'quote': setBlock('blockquote'); break;
     case 'bold':  exec('bold'); break;
     case 'italic':exec('italic'); break;
-    case 'ul':    exec('insertUnorderedList'); break;
-    case 'ol':    exec('insertOrderedList'); break;
-    case 'hr':    exec('insertHorizontalRule'); break;
+    case 'ul': case 'ol': {
+      const block = topBlock();
+      if (block && block.tagName === 'PRE') setBlock('p');       // erst zurück in einen Absatz
+      exec(cmd === 'ul' ? 'insertUnorderedList' : 'insertOrderedList');
+      ensureTail();
+      break;
+    }
+    case 'hr': exec('insertHorizontalRule'); ensureTail(); break;
     case 'code': {
       const sel = getSelection();
       const text = sel && sel.toString();
@@ -487,6 +557,26 @@ function command(cmd) {
     }
   }
   touch(); syncToolbar();
+}
+
+/* Verschachtelten Murks aus älteren Dokumenten wieder geradeziehen. */
+function repair(root) {
+  let n = 0;
+  for (const el of root.querySelectorAll('pre pre, blockquote blockquote, p p')) {
+    el.replaceWith(...el.childNodes); n++;
+  }
+  for (const el of root.querySelectorAll('pre ul, pre ol, pre h1, pre h2, pre h3, pre blockquote')) {
+    const pre = el.closest('pre');
+    if (pre) { pre.after(el); n++; }
+  }
+  for (const el of root.querySelectorAll('p > ul, p > ol, p > pre')) {   // Blöcke gehören nicht in einen Absatz
+    el.parentElement.after(el); n++;
+  }
+  for (const el of root.querySelectorAll('pre, blockquote, li')) {
+    if (!el.textContent.trim() && !el.querySelector('img,hr')) { el.remove(); n++; }
+  }
+  for (const el of root.querySelectorAll('ul, ol')) if (!el.children.length) { el.remove(); n++; }
+  return n;
 }
 
 function syncToolbar() {
@@ -534,7 +624,7 @@ function sanitize(html) {
 
 /* --- Editor-Ereignisse ---------------------------------------------------- */
 
-editor.addEventListener('input', touch);
+editor.addEventListener('input', () => { ensureTail(); touch(); });
 editor.addEventListener('blur', flushDoc);
 docTitle.addEventListener('input', touch);
 
@@ -566,6 +656,14 @@ editor.addEventListener('drop', async e => {
   for (const f of bilder) await insertImage(f);
 });
 
+/* Endet der Block auf einer leeren Zeile? Dann ist das zweite Enter der Ausstieg. */
+function letzterUmbruch(block) {
+  const last = block.lastChild;
+  if (last && last.nodeName === 'BR') return last;
+  if (last && last.nodeType === 3 && /\n[ \t]*$/.test(last.nodeValue)) return last;
+  return null;
+}
+
 /* Steht der Cursor am Ende dieses Blocks? */
 function atEnd(block) {
   const sel = getSelection();
@@ -584,15 +682,33 @@ editor.addEventListener('keydown', e => {
   }
 
   if (e.key === 'Enter' && !e.shiftKey) {
-    const block = blockOf(getSelection().anchorNode)?.closest('h1,h2,h3,pre');
-    if (block && block.tagName === 'PRE') {          // im Code-Block: Zeilenumbruch statt neuem Block
+    const block = topBlock();
+    if (!block) return;
+    const eingesperrt = block.tagName === 'PRE' || block.tagName === 'BLOCKQUOTE';
+
+    if (eingesperrt && (e.metaKey || e.ctrlKey)) {   // ⌘Enter: immer raus
+      e.preventDefault();
+      leaveBlock(block);
+      return;
+    }
+    if (eingesperrt && atEnd(block) && letzterUmbruch(block)) {
+      e.preventDefault();                            // zweites Enter am Ende: raus
+      let u;                                         // alle leeren Zeilen am Ende weg
+      while ((u = letzterUmbruch(block))) {
+        if (u.nodeType === 3) { u.nodeValue = u.nodeValue.replace(/\n[ \t]*$/, ''); break; }
+        u.remove();
+      }
+      leaveBlock(block);
+      return;
+    }
+    if (block.tagName === 'PRE') {                   // sonst: Zeilenumbruch im Block
       e.preventDefault();
       exec('insertText', '\n');
       touch();
       return;
     }
-    if (block && atEnd(block)) {                     // nach einer Überschrift: normaler Absatz
-      e.preventDefault();
+    if (/^H[123]$/.test(block.tagName) && atEnd(block)) {
+      e.preventDefault();                            // nach einer Überschrift: normaler Absatz
       exec('insertParagraph');
       exec('formatBlock', '<p>');
       touch(); syncToolbar();
