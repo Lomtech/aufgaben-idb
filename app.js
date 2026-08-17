@@ -345,7 +345,8 @@ function feld(t, sp) {
   if (sp.typ === 'prio') return `<select class="zf" data-k="${sp.k}">
       ${['—', 'Mittel', 'Hoch'].map((n, i) => `<option value="${i}"${t.prio === i ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
   if (sp.typ === 'date') return `<input class="zf" type="date" data-k="${sp.k}" value="${t.due}">`;
-  return `<input class="zf" data-k="${sp.k}" value="${esc(t[sp.k] || '')}" maxlength="500">`;
+  const wert = startWert !== null ? startWert : (t[sp.k] || '');
+  return `<input class="zf" data-k="${sp.k}" value="${esc(wert)}" maxlength="500">`;
 }
 
 /* Elternaufgaben sortiert, Unteraufgaben direkt darunter eingerückt. */
@@ -386,7 +387,14 @@ function renderTabelle() {
 
   if (aktiv && bearbeitet) {
     const f = gitter.querySelector('.aktiv .zf');
-    if (f) { f.focus(); if (f.select) try { f.select(); } catch { /* egal */ } }
+    if (f) {
+      f.focus();
+      try {
+        if (startWert !== null) f.setSelectionRange(f.value.length, f.value.length);  // hinter dem getippten Zeichen
+        else if (f.select) f.select();
+      } catch { /* Datums- und Auswahlfelder können das nicht */ }
+    }
+    startWert = null;
   }
 }
 
@@ -627,6 +635,7 @@ async function bearbeitenBeenden(uebernehmen = true) {
   if (!f || !aktiv) { bearbeitet = false; return; }
   const t = byId(aktiv.id);
   bearbeitet = false;
+  startWert = null;
   if (!t || !uebernehmen) return renderTabelle();
 
   if (aktiv.k === 'projekt' && f.value === '+') {
@@ -729,8 +738,7 @@ document.addEventListener('keydown', async e => {
 
   if (markiert.size && (e.key === 'Delete' || e.key === 'Backspace')) {
     e.preventDefault();
-    [...markiert].forEach(remove);
-    markiert.clear();
+    entferneMehrere([...markiert]);
     return;
   }
   if (!aktiv) return;
@@ -752,10 +760,9 @@ document.addEventListener('keydown', async e => {
   else if ((e.metaKey || e.ctrlKey) && taste.toLowerCase() === 'v') { /* paste-Ereignis übernimmt */ }
   else if (!e.metaKey && !e.ctrlKey && !e.altKey && taste.length === 1) {
     e.preventDefault();                                       // Tippen startet die Bearbeitung
-    const t = byId(aktiv.id);
     const sp = SP.find(s => s.k === aktiv.k);
-    if (!t || sp.typ === 'ro') return;
-    if (sp.typ === 'text') { t[aktiv.k] = taste; saveTask(t); }
+    if (!byId(aktiv.id) || sp.typ === 'ro') return;
+    startWert = sp.typ === 'text' ? taste : null;              // erst beim Bestätigen ins Modell
     setzeAktiv(aktiv.id, aktiv.k, true);
   }
 });
@@ -901,21 +908,31 @@ board.addEventListener('focusout', e => {
   else render();
 });
 
-/* Löschen nimmt Unteraufgaben mit – und bringt sie beim Rückgängig zurück. */
-function remove(id) {
-  const weg = tasks.filter(t => t.id === id || t.parent === id);
+/* Löschen nimmt Unteraufgaben mit. Mehrere Zeilen sind EIN Vorgang – sonst
+   holt Rückgängig nur die zuletzt gelöschte zurück. */
+function entferneMehrere(ids) {
+  const menge = new Set(ids);
+  const weg = tasks.filter(t => menge.has(t.id) || menge.has(t.parent));
   if (!weg.length) return;
+
   tasks = tasks.filter(t => !weg.includes(t));
-  if (editing === id) editing = null;
-  if (openId === id) openId = null;
+  if (menge.has(editing)) editing = null;
+  if (menge.has(openId)) openId = null;
+  markiert.clear();
   render();
   tx('tasks', s => weg.forEach(t => s.delete(t.id))).catch(e => notify('Nicht gelöscht: ' + e));
-  offerUndo(weg.length > 1 ? `Gelöscht (mit ${weg.length - 1} Unteraufgaben)` : 'Gelöscht', () => {
+
+  const text = ids.length > 1
+    ? `${pl(weg.length, 'Zeile', 'Zeilen')} gelöscht`
+    : weg.length > 1 ? `Gelöscht (mit ${pl(weg.length - 1, 'Unteraufgabe', 'Unteraufgaben')})` : 'Gelöscht';
+  offerUndo(text, () => {
     tasks.push(...weg);
     tx('tasks', s => weg.forEach(t => s.put(t))).catch(e => notify('Nicht wiederhergestellt: ' + e));
     render();
   });
 }
+
+const remove = id => entferneMehrere([id]);
 
 $('#purge').addEventListener('click', () => {
   const fertig = tasks.filter(t => statusVon(t) === 'done');
