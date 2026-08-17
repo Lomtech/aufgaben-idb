@@ -164,8 +164,17 @@ body[data-view="brett"] .gridwrap{display:none}
 .grid td{
   padding:5px 9px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);
   vertical-align:top;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  user-select:none;                       /* sonst zieht ein Klick eine Textauswahl über die Tabelle */
 }
 .grid td.z{cursor:cell}
+.grid .zf{user-select:text}
+
+/* Titelspalte bleibt beim Querscrollen stehen */
+.grid th:nth-child(2),.grid td:nth-child(2){position:sticky;left:38px;z-index:1;background:var(--bg)}
+.grid th:nth-child(2){z-index:3;background:var(--soft)}
+.grid tr:hover td:nth-child(2){background:#fafbfd}
+.grid tr.markiert td:nth-child(2){background:#eaf0ff}
+.grid td:nth-child(2){box-shadow:1px 0 0 var(--line)}
 .grid td.ro{color:var(--muted);background:#fcfcfd}
 .grid tr:hover td{background:#fafbfd}
 .grid tr.markiert td{background:#eaf0ff}

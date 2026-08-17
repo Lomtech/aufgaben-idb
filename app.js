@@ -322,8 +322,11 @@ function zelle(t, sp) {
   const ist = aktiv && aktiv.id === t.id && aktiv.k === sp.k;
   const bearbeitbar = sp.typ !== 'ro';
   if (ist && bearbeitet && bearbeitbar) return `<td class="z aktiv" data-k="${sp.k}">${feld(t, sp)}</td>`;
+  return `<td class="z${ist ? ' aktiv' : ''}${bearbeitbar ? '' : ' ro'}" data-k="${sp.k}">${zellInhalt(t, sp)}</td>`;
+}
 
-  const inhalt = sp.k === 'projekt' && t.projekt
+function zellInhalt(t, sp) {
+  return sp.k === 'projekt' && t.projekt
     ? `<span class="chip" style="--c:${projekt(t.projekt).color}">${esc(zellText(t, sp.k))}</span>`
     : sp.k === 'due' && t.due
       ? `<span class="due-badge ${dayDiff(t.due) < 0 && !t.done ? 'over' : dayDiff(t.due) === 0 ? 'today' : ''}">${esc(zellText(t, sp.k))}</span>`
@@ -331,8 +334,6 @@ function zelle(t, sp) {
       : sp.k === 'status' ? `<span class="stat s-${statusVon(t)}">${esc(zellText(t, sp.k))}</span>`
       : sp.k === 'prio' && t.prio ? `<span class="pz p${t.prio}">${esc(zellText(t, sp.k))}</span>`
       : esc(zellText(t, sp.k));
-
-  return `<td class="z${ist ? ' aktiv' : ''}${bearbeitbar ? '' : ' ro'}" data-k="${sp.k}">${inhalt}</td>`;
 }
 
 function feld(t, sp) {
@@ -346,7 +347,7 @@ function feld(t, sp) {
       ${['—', 'Mittel', 'Hoch'].map((n, i) => `<option value="${i}"${t.prio === i ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
   if (sp.typ === 'date') return `<input class="zf" type="date" data-k="${sp.k}" value="${t.due}">`;
   const wert = startWert !== null ? startWert : (t[sp.k] || '');
-  return `<input class="zf" data-k="${sp.k}" value="${esc(wert)}" maxlength="500">`;
+  return `<input class="zf" data-k="${sp.k}" value="${esc(wert)}" maxlength="500"${t.id === 'neu' ? ' placeholder="Neue Aufgabe … (Enter)"' : ''}>`;
 }
 
 /* Elternaufgaben sortiert, Unteraufgaben direkt darunter eingerückt. */
@@ -376,7 +377,14 @@ function renderTabelle() {
         <td class="nr">${i + 1}</td>
         ${SP.map(s => zelle(t, s)).join('')}
       </tr>`).join('')}
-      <tr class="neu"><td class="nr">＋</td><td colspan="${SP.length}">Neue Aufgabe … (hier tippen)</td></tr>
+      <tr data-id="neu" class="neu">
+        <td class="nr">＋</td>
+        ${SP.map((s, i) => i === 0
+          ? (aktiv && aktiv.id === 'neu' && bearbeitet
+              ? `<td class="z aktiv" data-k="title">${feld({ id: 'neu', title: '' }, s)}</td>`
+              : `<td class="z${aktiv && aktiv.id === 'neu' ? ' aktiv' : ''}" data-k="title">Neue Aufgabe … (hier tippen)</td>`)
+          : `<td class="ro"></td>`).join('')}
+      </tr>
     </tbody>`;
 
   const leer = $('#empty');
@@ -597,16 +605,52 @@ titleIn.addEventListener('keydown', e => {
 
 /* ------------------------------------------------------- Tabelle bedienen --- */
 
-const zeilenIds = () => tabZeilen().map(z => z.t.id);
+const zeilenIds = () => [...tabZeilen().map(z => z.t.id), 'neu'];
+const zelleEl = (id, k) => gitter.querySelector(`tr[data-id="${id}"] td[data-k="${k}"]`);
 
+/* Nur die betroffenen Zellen anfassen. Ein vollständiges Neuzeichnen bei jedem
+   Klick würde ein gerade geöffnetes Auswahlfeld sofort wieder wegwerfen und
+   die laufende Mausauswahl über die halbe Tabelle ziehen. */
 function setzeAktiv(id, k, edit = false) {
+  const alt = aktiv;
+  const sp = SP.find(s => s.k === k);
+  if (!sp) return;
+
+  if (alt) zelleZurueck(alt);
   aktiv = id ? { id, k } : null;
-  bearbeitet = !!edit && SP.find(s => s.k === k)?.typ !== 'ro';
-  renderTabelle();
-  if (!bearbeitet) {
-    const td = gitter.querySelector('tr[data-id="' + id + '"] td[data-k="' + k + '"]');
-    td?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  bearbeitet = !!edit && sp.typ !== 'ro' && (id !== 'neu' || k === 'title');
+  if (!aktiv) return;
+
+  const el = zelleEl(id, k);
+  if (!el) return renderTabelle();
+  el.classList.add('aktiv');
+
+  if (bearbeitet) {
+    const t = id === 'neu' ? { id: 'neu', title: '' } : byId(id);
+    if (!t) { bearbeitet = false; return; }
+    el.innerHTML = feld(t, sp);
+    const f = el.querySelector('.zf');
+    if (f) {
+      f.focus();
+      try {
+        if (startWert !== null) f.setSelectionRange(f.value.length, f.value.length);
+        else if (f.select) f.select();
+      } catch { /* Datums- und Auswahlfelder können das nicht */ }
+    }
+    startWert = null;
   }
+  el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+/* Zelle aus dem Bearbeitungszustand zurück in die Anzeige */
+function zelleZurueck(ziel) {
+  const el = zelleEl(ziel.id, ziel.k);
+  if (!el) return;
+  el.classList.remove('aktiv');
+  const sp = SP.find(s => s.k === ziel.k);
+  if (!el.querySelector('.zf')) return;                       // war gar nicht in Bearbeitung
+  if (ziel.id === 'neu') el.textContent = 'Neue Aufgabe … (hier tippen)';
+  else { const t = byId(ziel.id); if (t && sp) el.innerHTML = zellInhalt(t, sp); }
 }
 
 /* Wert einer Zelle setzen – nimmt auch Text an (fürs Einfügen aus Excel). */
@@ -633,6 +677,18 @@ async function zelleSetzen(t, k, wert) {
 async function bearbeitenBeenden(uebernehmen = true) {
   const f = gitter.querySelector('.aktiv .zf');
   if (!f || !aktiv) { bearbeitet = false; return; }
+
+  if (aktiv.id === 'neu') {                                   // letzte Zeile: neue Aufgabe anlegen
+    const wert = f.value.trim();
+    bearbeitet = false;
+    startWert = null;
+    if (!uebernehmen || !wert) { zelleZurueck(aktiv); aktiv = null; return; }
+    neueAufgabe(wert);
+    renderTabelle();
+    setzeAktiv('neu', 'title', true);                         // gleich weiter tippen
+    return;
+  }
+
   const t = byId(aktiv.id);
   bearbeitet = false;
   startWert = null;
@@ -656,6 +712,8 @@ gitter.addEventListener('mousedown', e => {
 });
 
 gitter.addEventListener('click', async e => {
+  if (e.target.closest('.zf')) return;                       // Klick ins offene Feld: Finger weg
+
   const kopf = e.target.closest('th[data-k]');
   if (kopf) {                                                // Spaltenkopf sortiert
     if (e.target.closest('[data-griff]')) return;
@@ -663,8 +721,6 @@ gitter.addEventListener('click', async e => {
     renderTabelle();
     return;
   }
-  const neu = e.target.closest('tr.neu');
-  if (neu) { titleIn.focus(); return; }
 
   const tr = e.target.closest('tr[data-id]');
   if (!tr) return;
@@ -689,9 +745,12 @@ gitter.addEventListener('click', async e => {
 
   const td = e.target.closest('td[data-k]');
   if (!td) return;
-  if (bearbeitet && aktiv && (aktiv.id !== id || aktiv.k !== td.dataset.k)) await bearbeitenBeenden(true);
-  markiert.clear();
-  setzeAktiv(id, td.dataset.k, aktiv && aktiv.id === id && aktiv.k === td.dataset.k);
+  const gleiche = aktiv && aktiv.id === id && aktiv.k === td.dataset.k;
+  if (bearbeitet && !gleiche) await bearbeitenBeenden(true);
+  if (markiert.size) { markiert.clear(); renderTabelle(); }
+
+  // die leere letzte Zeile geht sofort in die Bearbeitung – wie in Excel
+  setzeAktiv(id, td.dataset.k, gleiche || id === 'neu');
 });
 
 gitter.addEventListener('dblclick', e => {
@@ -731,7 +790,12 @@ document.addEventListener('keydown', async e => {
 
   if (imFeld) {
     if (e.key === 'Escape') { e.preventDefault(); await bearbeitenBeenden(false); }
-    else if (e.key === 'Enter') { e.preventDefault(); await bearbeitenBeenden(true); bewege(0, 1); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      const warNeu = aktiv && aktiv.id === 'neu';       // letzte Zeile bleibt zum Weitertippen offen
+      await bearbeitenBeenden(true);
+      if (!warNeu) bewege(0, 1);
+    }
     else if (e.key === 'Tab')   { e.preventDefault(); await bearbeitenBeenden(true); bewege(e.shiftKey ? -1 : 1, 0); }
     return;
   }
@@ -761,7 +825,7 @@ document.addEventListener('keydown', async e => {
   else if (!e.metaKey && !e.ctrlKey && !e.altKey && taste.length === 1) {
     e.preventDefault();                                       // Tippen startet die Bearbeitung
     const sp = SP.find(s => s.k === aktiv.k);
-    if (!byId(aktiv.id) || sp.typ === 'ro') return;
+    if ((aktiv.id !== 'neu' && !byId(aktiv.id)) || sp.typ === 'ro') return;
     startWert = sp.typ === 'text' ? taste : null;              // erst beim Bestätigen ins Modell
     setzeAktiv(aktiv.id, aktiv.k, true);
   }
@@ -774,14 +838,15 @@ function bewege(dx, dy) {
   const si = SP.findIndex(s => s.k === aktiv.k);
   const nz = Math.max(0, Math.min(ids.length - 1, zi + dy));
   const ns = Math.max(0, Math.min(SP.length - 1, si + dx));
-  setzeAktiv(ids[nz], SP[ns].k);
+  const ziel = ids[nz];
+  setzeAktiv(ziel, ziel === 'neu' ? 'title' : SP[ns].k);      // die letzte Zeile hat nur den Titel
 }
 
 /* Kopieren: markierte Zeilen, sonst die aktive Zelle – als Tabulator-Text */
 function kopieren(e) {
   const zeilen = markiert.size
     ? tabZeilen().filter(z => markiert.has(z.t.id)).map(z => SP.map(s => rohText(z.t, s.k)).join('\t'))
-    : aktiv ? [rohText(byId(aktiv.id), aktiv.k)] : [];
+    : (aktiv && byId(aktiv.id)) ? [rohText(byId(aktiv.id), aktiv.k)] : [];
   if (!zeilen.length) return;
   const text = zeilen.join('\n');
   if (e && e.clipboardData) e.clipboardData.setData('text/plain', text);
@@ -798,8 +863,8 @@ document.addEventListener('paste', async e => {
   e.preventDefault();
 
   const raster = text.replace(/\r/g, '').split('\n').filter(z => z !== '').map(z => z.split('\t'));
-  const ids = zeilenIds();
-  let zi = ids.indexOf(aktiv.id);
+  const ids = zeilenIds().filter(id => id !== 'neu');
+  let zi = aktiv.id === 'neu' ? ids.length : ids.indexOf(aktiv.id);
   const si = SP.findIndex(s => s.k === aktiv.k);
   let neu = 0;
 
