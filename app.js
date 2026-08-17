@@ -12,13 +12,14 @@ const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
 const list = $('#list'), titleIn = $('#title'), qIn = $('#q'), toast = $('#toast');
-const editor = $('#doc'), docTitle = $('#doctitle'), docList = $('#doclist'), docQ = $('#docq');
+const editor = $('#doc'), docTitle = $('#doctitle');
+const tree = $('#tree'), railQ = $('#railq');
 
 const PRIO = ['ohne', 'mittel', 'hoch'];
 
 let tab = 'tasks';
 let tasks = [], docs = [];
-let filter = 'open', query = '', docQuery = '', sort = 'smart';
+let filter = 'open', query = '', sort = 'smart';
 let editing = null;    // id, deren Titel gerade im Eingabefeld hängt
 let openId = null;     // id, deren Detailbereich offen ist
 let curDoc = null;     // offenes Dokument
@@ -171,11 +172,139 @@ function render() {
   updateCount();
 }
 
-function updateCount() {
-  const offen = tasks.reduce((n, t) => n + (t.done ? 0 : 1), 0);
-  $('#c-tasks').textContent = offen || '';
-  $('#c-text').textContent = docs.length || '';
-  $('#c-dia').textContent = dias.length || '';
+/* =============================================================== BAUM ====== */
+/* Linke Leiste: Reiter → Eintrag → Überschrift → Unterüberschrift.
+   Aufgeklappt wird immer nur der aktive Zweig, sonst wird es unübersichtlich. */
+
+let railQuery = '';
+const passt = s => !railQuery || String(s).toLowerCase().includes(railQuery);
+
+function zeile(stufe, ziel, text, zahl = '', aktiv = false, extra = '') {
+  return `<li class="tw l${stufe}${aktiv ? ' on' : ''}" data-go="${ziel}" role="treeitem">`
+       + `<span class="tx">${esc(text || '—')}</span>`
+       + (zahl !== '' && zahl !== 0 ? `<b>${zahl}</b>` : '') + extra + '</li>';
+}
+const plusKnopf = art => `<button type="button" class="tplus" data-act="${art}" title="Neu anlegen" aria-label="Neu anlegen">＋</button>`;
+const wegKnopf  = ziel => `<button type="button" class="ddel" data-del="${ziel}" title="Löschen" aria-label="Löschen">×</button>`;
+
+/* Überschriften eines Dokuments – beim offenen aus dem Editor, sonst aus dem HTML. */
+function gliederung(d) {
+  const quelle = curDoc && d.id === curDoc.id
+    ? editor
+    : new DOMParser().parseFromString(d.html || '', 'text/html').body;
+  return [...quelle.querySelectorAll('h1,h2,h3')]
+    .map((h, i) => ({ i, stufe: +h.tagName[1], text: h.textContent.trim() }));
+}
+
+function renderTree() {
+  const teile = [];
+
+  /* Aufgaben */
+  const offen = tasks.filter(t => !t.done).length;
+  teile.push(zeile(1, 'tab:tasks', 'Aufgaben', offen, tab === 'tasks'));
+  if (tab === 'tasks') {
+    for (const [f, name, liste] of [
+      ['open', 'Offen', tasks.filter(t => !t.done)],
+      ['all', 'Alle', tasks],
+      ['done', 'Erledigt', tasks.filter(t => t.done)],
+    ]) {
+      teile.push(zeile(2, 'f:' + f, name, liste.length, filter === f));
+      if (filter === f)
+        for (const t of [...liste].sort(order).filter(t => passt(t.title)))
+          teile.push(zeile(3, 't:' + t.id, t.title));
+    }
+  }
+
+  /* Text */
+  teile.push(zeile(1, 'tab:text', 'Text', docs.length, tab === 'text', plusKnopf('newdoc')));
+  if (tab === 'text') {
+    for (const d of [...docs].sort((a, b) => b.updated - a.updated)) {
+      const istOffen = !!(curDoc && d.id === curDoc.id);
+      const kinder = istOffen ? gliederung(d) : [];
+      if (!passt(d.title) && !kinder.some(h => passt(h.text))) continue;
+      teile.push(zeile(2, 'doc:' + d.id, d.title || 'Ohne Titel', '', istOffen, wegKnopf('doc:' + d.id)));
+      for (const h of kinder)
+        if (passt(d.title) || passt(h.text)) teile.push(zeile(2 + h.stufe, 'h:' + h.i, h.text));
+    }
+  }
+
+  /* Diagramme */
+  teile.push(zeile(1, 'tab:dia', 'Diagramme', dias.length, tab === 'dia', plusKnopf('newdia')));
+  if (tab === 'dia') {
+    for (const d of [...dias].sort((a, b) => b.updated - a.updated)) {
+      const istOffen = !!(curDia && d.id === curDia.id);
+      const kinder = istOffen ? d.nodes : [];
+      if (!passt(d.title) && !kinder.some(n => passt(n.text))) continue;
+      teile.push(zeile(2, 'dia:' + d.id, d.title || 'Ohne Titel', '', istOffen, wegKnopf('dia:' + d.id)));
+      for (const n of kinder)
+        if (passt(d.title) || passt(n.text)) teile.push(zeile(3, 'n:' + n.id, n.text, '', n.id === auswahl));
+    }
+  }
+
+  tree.innerHTML = teile.join('');
+}
+
+const updateCount = renderTree;
+
+tree.addEventListener('click', e => {
+  const neu = e.target.closest('[data-act]');
+  if (neu) {
+    if (neu.dataset.act === 'newdoc') { setTab('text'); newDoc(); }
+    else { setTab('dia'); newDia(); }
+    return;
+  }
+  const weg = e.target.closest('[data-del]');
+  if (weg) {
+    const [art, id] = trenne(weg.dataset.del);
+    if (art === 'doc') delDoc(id); else delDia(id);
+    return;
+  }
+  const li = e.target.closest('[data-go]');
+  if (!li) return;
+  const [art, id] = trenne(li.dataset.go);
+
+  if (art === 'tab')      setTab(id);
+  else if (art === 'f')   { setFilter(id); render(); }
+  else if (art === 't')   zeigeAufgabe(id);
+  else if (art === 'doc') openDoc(id);
+  else if (art === 'h')   springeZuUeberschrift(+id);
+  else if (art === 'dia') openDia(id);
+  else if (art === 'n')   { auswahl = id; renderDia(); zeigeKnoten(id); renderTree(); }
+});
+
+const trenne = s => { const k = s.indexOf(':'); return [s.slice(0, k), s.slice(k + 1)]; };
+
+railQ.addEventListener('input', () => { railQuery = railQ.value.trim().toLowerCase(); renderTree(); });
+
+function hervorheben(el) {
+  if (!el) return;
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.classList.add('blink');
+  setTimeout(() => el.classList.remove('blink'), 900);
+}
+
+function zeigeAufgabe(id) {
+  setTab('tasks');
+  const t = byId(id);
+  if (!t) return;
+  if (filter !== 'all' && (filter === 'done') !== t.done) setFilter('all');
+  render();
+  hervorheben(list.querySelector(`li[data-id="${id}"]`));
+}
+
+function springeZuUeberschrift(i) {
+  setTab('text');
+  const h = editor.querySelectorAll('h1,h2,h3')[i];
+  if (!h) return;
+  hervorheben(h);
+  editor.focus();
+  caretToEnd(h);
+}
+
+function zeigeKnoten(id) {
+  const n = knoten(id);
+  if (!n) return;
+  canvas.scrollTo({ left: Math.max(0, n.x * zoom - 140), top: Math.max(0, n.y * zoom - 110), behavior: 'smooth' });
 }
 
 /* Cursor überlebt das Neuzeichnen der Liste. */
@@ -325,22 +454,9 @@ $('#sort').addEventListener('change', e => {
 const textOf = html => html.replace(/<[^>]*>/g, ' ');
 
 function renderDocs() {
-  const q = docQuery.trim().toLowerCase();
-  const view = docs
-    .filter(d => !q || d.title.toLowerCase().includes(q) || textOf(d.html).toLowerCase().includes(q))
-    .sort((a, b) => b.updated - a.updated);
-
-  docList.innerHTML = view.map(d => `<li data-id="${d.id}" class="${curDoc && d.id === curDoc.id ? 'on' : ''}">
-      <span class="dbox">
-        <span class="dt">${esc(d.title || 'Ohne Titel')}</span>
-        <span class="dd">${fmtStamp(d.updated)}</span>
-      </span>
-      <button type="button" class="ddel" title="Dokument löschen" aria-label="Dokument löschen">×</button>
-    </li>`).join('');
-
   $('#editor').hidden = !curDoc;
   $('#nodocs').hidden = !!curDoc;
-  updateCount();
+  renderTree();
 }
 
 /* --- Bilder: liegen als Blob im Store, im Dokument steht nur data-img ------ */
@@ -765,15 +881,7 @@ $('#toolbar').addEventListener('mousedown', e => {
   command(b.dataset.cmd);
 });
 
-$('#newdoc').addEventListener('click', newDoc);
-docQ.addEventListener('input', () => { docQuery = docQ.value; renderDocs(); });
-
-docList.addEventListener('click', e => {
-  const li = e.target.closest('li');
-  if (!li) return;
-  if (e.target.classList.contains('ddel')) delDoc(li.dataset.id);
-  else openDoc(li.dataset.id);
-});
+/* Anlegen, Öffnen und Löschen laufen über den Baum in der linken Leiste. */
 
 /* =========================================================== DIAGRAMME ===== */
 
@@ -781,6 +889,7 @@ const canvas = $('#canvas'), diaTitle = $('#diatitle');
 const GRID = 10, BREITE = 1500, HOEHE = 950;
 
 let dias = [], curDia = null, auswahl = null, verbindeVon = null, verbindeModus = false, zieht = null;
+let zoom = 1;
 
 const TINTE = { box:'#ffffff', round:'#f2f6ff', db:'#f7f3ff', ext:'#fafbfc' };
 const knoten = id => curDia && curDia.nodes.find(n => n.id === id);
@@ -885,21 +994,16 @@ function svgOf(d) {
 
 function renderDia() {
   if (!curDia) { canvas.innerHTML = ''; return; }
-  canvas.innerHTML = `<svg width="${BREITE}" height="${HOEHE}" viewBox="0 0 ${BREITE} ${HOEHE}" ${SCHRIFT}>${PFEIL}${inhalt(curDia, auswahl)}</svg>`;
+  canvas.innerHTML = `<svg width="${Math.round(BREITE * zoom)}" height="${Math.round(HOEHE * zoom)}"`
+                   + ` viewBox="0 0 ${BREITE} ${HOEHE}" ${SCHRIFT}>${PFEIL}${inhalt(curDia, auswahl)}</svg>`;
   $('#dia-connect').classList.toggle('on', verbindeModus);
+  $('#diazoom').textContent = Math.round(zoom * 100) + ' %';
 }
 
 function renderDiaList() {
-  const listeEl = $('#dialist');
-  listeEl.innerHTML = [...dias].sort((a, b) => b.updated - a.updated).map(d =>
-    `<li data-id="${d.id}" class="${curDia && d.id === curDia.id ? 'on' : ''}">
-      <span class="dbox"><span class="dt">${esc(d.title || 'Ohne Titel')}</span>
-      <span class="dd">${d.nodes.length} Elemente · ${fmtStamp(d.updated)}</span></span>
-      <button type="button" class="ddel" title="Diagramm löschen" aria-label="Diagramm löschen">×</button>
-    </li>`).join('');
   $('#diaeditor').hidden = !curDia;
   $('#nodias').hidden = !!curDia;
-  updateCount();
+  renderTree();
 }
 
 function saveDia(delay = 250) {
@@ -1000,11 +1104,14 @@ function beschriften(id) {
   feld.className = 'dialabel';
   feld.value = (n || e).text;
   feld.maxLength = 120;
-  if (n) { feld.style.left = n.x + 'px'; feld.style.top = (n.y + n.h / 2 - 15) + 'px'; feld.style.width = Math.max(n.w, 150) + 'px'; }
-  else {
+  if (n) {                                            // Position folgt dem Zoom
+    feld.style.left = (n.x * zoom) + 'px';
+    feld.style.top = ((n.y + n.h / 2) * zoom - 15) + 'px';
+    feld.style.width = Math.max(n.w * zoom, 150) + 'px';
+  } else {
     const a = knoten(e.from), b = knoten(e.to);
-    feld.style.left = ((a.x + b.x) / 2 + 20) + 'px';
-    feld.style.top = ((a.y + b.y) / 2 + 20) + 'px';
+    feld.style.left = (((a.x + b.x) / 2 + 20) * zoom) + 'px';
+    feld.style.top = (((a.y + b.y) / 2 + 20) * zoom) + 'px';
     feld.style.width = '160px';
   }
   canvas.appendChild(feld);
@@ -1027,7 +1134,7 @@ function beschriften(id) {
 
 const punkt = e => {
   const r = canvas.getBoundingClientRect();
-  return { x: e.clientX - r.left + canvas.scrollLeft, y: e.clientY - r.top + canvas.scrollTop };
+  return { x: (e.clientX - r.left + canvas.scrollLeft) / zoom, y: (e.clientY - r.top + canvas.scrollTop) / zoom };
 };
 
 canvas.addEventListener('pointerdown', e => {
@@ -1074,7 +1181,6 @@ canvas.addEventListener('dblclick', e => {
 });
 
 $$('[data-add]').forEach(b => b.addEventListener('click', () => addNode(b.dataset.add)));
-$('#newdia').addEventListener('click', newDia);
 $('#dia-del').addEventListener('click', loeschen);
 $('#dia-connect').addEventListener('click', () => {
   verbindeModus = !verbindeModus;
@@ -1089,12 +1195,22 @@ $('#dia-dash').addEventListener('click', () => {
 });
 diaTitle.addEventListener('input', () => saveDia(400));
 
-$('#dialist').addEventListener('click', e => {
-  const li = e.target.closest('li');
-  if (!li) return;
-  if (e.target.classList.contains('ddel')) delDia(li.dataset.id);
-  else openDia(li.dataset.id);
-});
+/* Strg/⌘ + Rad (oder Zwei-Finger-Zoom) vergrößert die Zeichenfläche. */
+canvas.addEventListener('wheel', e => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  const vor = zoom;
+  zoom = Math.max(0.3, Math.min(2.5, zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+  if (zoom === vor) return;
+  const r = canvas.getBoundingClientRect();
+  const zx = e.clientX - r.left, zy = e.clientY - r.top;      // Punkt unter dem Zeiger festhalten
+  const px = (canvas.scrollLeft + zx) / vor, py = (canvas.scrollTop + zy) / vor;
+  renderDia();
+  canvas.scrollLeft = px * zoom - zx;
+  canvas.scrollTop = py * zoom - zy;
+}, { passive: false });
+
+$('#diazoom').addEventListener('click', () => { zoom = 1; renderDia(); canvas.scrollTo({ left: 0, top: 0 }); });
 
 /* --- Ins Dokument einbetten ----------------------------------------------- */
 
