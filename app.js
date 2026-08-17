@@ -586,6 +586,246 @@ titleIn.addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); $('#new').requestSubmit(); }
 });
 
+/* ------------------------------------------------------- Tabelle bedienen --- */
+
+const zeilenIds = () => tabZeilen().map(z => z.t.id);
+
+function setzeAktiv(id, k, edit = false) {
+  aktiv = id ? { id, k } : null;
+  bearbeitet = !!edit && SP.find(s => s.k === k)?.typ !== 'ro';
+  renderTabelle();
+  if (!bearbeitet) {
+    const td = gitter.querySelector('tr[data-id="' + id + '"] td[data-k="' + k + '"]');
+    td?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+}
+
+/* Wert einer Zelle setzen – nimmt auch Text an (fürs Einfügen aus Excel). */
+async function zelleSetzen(t, k, wert) {
+  const s = String(wert ?? '').trim();
+  if (k === 'title')   { if (s) t.title = s.slice(0, 500); }
+  else if (k === 'note') t.note = s.slice(0, 2000);
+  else if (k === 'due')  t.due = /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+  else if (k === 'prio') {
+    const n = /^\d$/.test(s) ? +s : ['', 'mittel', 'hoch'].indexOf(s.toLowerCase());
+    t.prio = [0, 1, 2].includes(n) ? n : 0;
+  } else if (k === 'status') {
+    const treffer = Object.entries(STATUS_NAME).find(([v, n]) => v === s || n.toLowerCase() === s.toLowerCase());
+    setStatus(t, treffer ? treffer[0] : 'open');
+  } else if (k === 'projekt') {
+    if (!s) t.projekt = '';
+    else if (projekt(s)) t.projekt = s;                      // id direkt
+    else { const p = await projektAnlegen(s); if (p) t.projekt = p.id; }
+    kinderVon(t.id).forEach(x => { x.projekt = t.projekt; saveTask(x); });
+  }
+  saveTask(t);
+}
+
+async function bearbeitenBeenden(uebernehmen = true) {
+  const f = gitter.querySelector('.aktiv .zf');
+  if (!f || !aktiv) { bearbeitet = false; return; }
+  const t = byId(aktiv.id);
+  bearbeitet = false;
+  if (!t || !uebernehmen) return renderTabelle();
+
+  if (aktiv.k === 'projekt' && f.value === '+') {
+    const name = prompt('Name des neuen Projekts:');
+    const p = name ? await projektAnlegen(name) : null;
+    t.projekt = p ? p.id : t.projekt;
+    kinderVon(t.id).forEach(x => { x.projekt = t.projekt; saveTask(x); });
+    saveTask(t);
+  } else {
+    await zelleSetzen(t, aktiv.k, f.value);
+  }
+  renderTabelle();
+}
+
+gitter.addEventListener('mousedown', e => {
+  const griff = e.target.closest('[data-griff]');
+  if (griff) { breiteZiehen(e, griff.dataset.griff); e.preventDefault(); }
+});
+
+gitter.addEventListener('click', async e => {
+  const kopf = e.target.closest('th[data-k]');
+  if (kopf) {                                                // Spaltenkopf sortiert
+    if (e.target.closest('[data-griff]')) return;
+    tabSort = tabSort.k === kopf.dataset.k ? { k: kopf.dataset.k, ab: !tabSort.ab } : { k: kopf.dataset.k, ab: false };
+    renderTabelle();
+    return;
+  }
+  const neu = e.target.closest('tr.neu');
+  if (neu) { titleIn.focus(); return; }
+
+  const tr = e.target.closest('tr[data-id]');
+  if (!tr) return;
+  const id = tr.dataset.id;
+
+  if (e.target.closest('td.nr')) {                           // Zeilennummer markiert
+    if (e.shiftKey && letzteZeile) {
+      const ids = zeilenIds();
+      const [a, b] = [ids.indexOf(letzteZeile), ids.indexOf(id)].sort((x, y) => x - y);
+      ids.slice(a, b + 1).forEach(x => markiert.add(x));
+    } else if (e.metaKey || e.ctrlKey) {
+      markiert.has(id) ? markiert.delete(id) : markiert.add(id);
+      letzteZeile = id;
+    } else {
+      markiert = new Set([id]);
+      letzteZeile = id;
+    }
+    aktiv = null;
+    renderTabelle();
+    return;
+  }
+
+  const td = e.target.closest('td[data-k]');
+  if (!td) return;
+  if (bearbeitet && aktiv && (aktiv.id !== id || aktiv.k !== td.dataset.k)) await bearbeitenBeenden(true);
+  markiert.clear();
+  setzeAktiv(id, td.dataset.k, aktiv && aktiv.id === id && aktiv.k === td.dataset.k);
+});
+
+gitter.addEventListener('dblclick', e => {
+  const td = e.target.closest('td[data-k]');
+  const tr = e.target.closest('tr[data-id]');
+  if (td && tr) setzeAktiv(tr.dataset.id, td.dataset.k, true);
+});
+
+gitter.addEventListener('change', e => {
+  if (e.target.classList.contains('zf') && e.target.tagName === 'SELECT') bearbeitenBeenden(true);
+});
+
+/* Spaltenbreite ziehen */
+function breiteZiehen(e, k) {
+  const start = e.clientX;
+  const th = gitter.querySelector(`th[data-k="${k}"]`);
+  const anfang = th.getBoundingClientRect().width;
+  const zieh = ev => {
+    breiten[k] = Math.max(56, Math.round(anfang + ev.clientX - start));
+    const col = gitter.querySelectorAll('col')[SP.findIndex(s => s.k === k) + 1];
+    if (col) col.style.width = breiten[k] + 'px';
+  };
+  const fertig = () => {
+    document.removeEventListener('mousemove', zieh);
+    document.removeEventListener('mouseup', fertig);
+    try { localStorage.setItem('spaltenbreiten', JSON.stringify(breiten)); } catch { /* egal */ }
+  };
+  document.addEventListener('mousemove', zieh);
+  document.addEventListener('mouseup', fertig);
+}
+
+/* Tastatur wie im Tabellenblatt */
+document.addEventListener('keydown', async e => {
+  if (tab !== 'tasks' || ansicht !== 'tabelle') return;
+  const imFeld = e.target.classList && e.target.classList.contains('zf');
+  if (!imFeld && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;   // Suchfeld usw.
+
+  if (imFeld) {
+    if (e.key === 'Escape') { e.preventDefault(); await bearbeitenBeenden(false); }
+    else if (e.key === 'Enter') { e.preventDefault(); await bearbeitenBeenden(true); bewege(0, 1); }
+    else if (e.key === 'Tab')   { e.preventDefault(); await bearbeitenBeenden(true); bewege(e.shiftKey ? -1 : 1, 0); }
+    return;
+  }
+
+  if (markiert.size && (e.key === 'Delete' || e.key === 'Backspace')) {
+    e.preventDefault();
+    [...markiert].forEach(remove);
+    markiert.clear();
+    return;
+  }
+  if (!aktiv) return;
+
+  const taste = e.key;
+  if (taste === 'ArrowDown')  { e.preventDefault(); bewege(0, 1); }
+  else if (taste === 'ArrowUp')    { e.preventDefault(); bewege(0, -1); }
+  else if (taste === 'ArrowRight') { e.preventDefault(); bewege(1, 0); }
+  else if (taste === 'ArrowLeft')  { e.preventDefault(); bewege(-1, 0); }
+  else if (taste === 'Enter')      { e.preventDefault(); setzeAktiv(aktiv.id, aktiv.k, true); }
+  else if (taste === 'Tab')        { e.preventDefault(); bewege(e.shiftKey ? -1 : 1, 0); }
+  else if (taste === 'Escape')     { aktiv = null; renderTabelle(); }
+  else if (taste === 'Delete' || taste === 'Backspace') {
+    e.preventDefault();
+    const t = byId(aktiv.id);
+    if (t && aktiv.k !== 'title') { await zelleSetzen(t, aktiv.k, ''); renderTabelle(); }
+  }
+  else if ((e.metaKey || e.ctrlKey) && taste.toLowerCase() === 'c') kopieren(e);
+  else if ((e.metaKey || e.ctrlKey) && taste.toLowerCase() === 'v') { /* paste-Ereignis übernimmt */ }
+  else if (!e.metaKey && !e.ctrlKey && !e.altKey && taste.length === 1) {
+    e.preventDefault();                                       // Tippen startet die Bearbeitung
+    const t = byId(aktiv.id);
+    const sp = SP.find(s => s.k === aktiv.k);
+    if (!t || sp.typ === 'ro') return;
+    if (sp.typ === 'text') { t[aktiv.k] = taste; saveTask(t); }
+    setzeAktiv(aktiv.id, aktiv.k, true);
+  }
+});
+
+function bewege(dx, dy) {
+  if (!aktiv) return;
+  const ids = zeilenIds();
+  const zi = ids.indexOf(aktiv.id);
+  const si = SP.findIndex(s => s.k === aktiv.k);
+  const nz = Math.max(0, Math.min(ids.length - 1, zi + dy));
+  const ns = Math.max(0, Math.min(SP.length - 1, si + dx));
+  setzeAktiv(ids[nz], SP[ns].k);
+}
+
+/* Kopieren: markierte Zeilen, sonst die aktive Zelle – als Tabulator-Text */
+function kopieren(e) {
+  const zeilen = markiert.size
+    ? tabZeilen().filter(z => markiert.has(z.t.id)).map(z => SP.map(s => rohText(z.t, s.k)).join('\t'))
+    : aktiv ? [rohText(byId(aktiv.id), aktiv.k)] : [];
+  if (!zeilen.length) return;
+  const text = zeilen.join('\n');
+  if (e && e.clipboardData) e.clipboardData.setData('text/plain', text);
+  else navigator.clipboard?.writeText(text).catch(() => {});
+  notify(`${pl(zeilen.length, 'Zeile', 'Zeilen')} kopiert`);
+}
+
+/* Einfügen: Tabulator-Text füllt ab der aktiven Zelle, neue Zeilen entstehen bei Bedarf */
+document.addEventListener('paste', async e => {
+  if (tab !== 'tasks' || ansicht !== 'tabelle' || !aktiv) return;
+  if (e.target.classList && e.target.classList.contains('zf')) return;
+  const text = e.clipboardData?.getData('text/plain');
+  if (!text) return;
+  e.preventDefault();
+
+  const raster = text.replace(/\r/g, '').split('\n').filter(z => z !== '').map(z => z.split('\t'));
+  const ids = zeilenIds();
+  let zi = ids.indexOf(aktiv.id);
+  const si = SP.findIndex(s => s.k === aktiv.k);
+  let neu = 0;
+
+  for (const zeile of raster) {
+    let t = ids[zi] ? byId(ids[zi]) : null;
+    if (!t) { t = neueAufgabe(zeile[0]?.trim() || 'Ohne Titel'); ids.push(t.id); neu++; }
+    for (let j = 0; j < zeile.length && si + j < SP.length; j++) {
+      const sp = SP[si + j];
+      if (sp.typ !== 'ro') await zelleSetzen(t, sp.k, zeile[j]);
+    }
+    zi++;
+  }
+  renderTabelle();
+  notify(`${pl(raster.length, 'Zeile', 'Zeilen')} eingefügt${neu ? `, davon ${neu} neu` : ''}`);
+});
+
+document.addEventListener('copy', e => {
+  if (tab !== 'tasks' || ansicht !== 'tabelle') return;
+  if (e.target.classList && e.target.classList.contains('zf')) return;
+  if (!aktiv && !markiert.size) return;
+  e.preventDefault();
+  kopieren(e);
+});
+
+/* Ansicht umschalten */
+function setAnsicht(w) {
+  ansicht = w === 'brett' ? 'brett' : 'tabelle';
+  document.body.dataset.view = ansicht;
+  $$('[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === ansicht));
+  try { localStorage.setItem('ansicht', ansicht); } catch { /* egal */ }
+  render();
+}
+$$('[data-view]').forEach(b => b.addEventListener('click', () => setAnsicht(b.dataset.view)));
+
 board.addEventListener('click', e => {
   const k = e.target.dataset.k;
   const sub = e.target.closest('.subs li');
@@ -1894,6 +2134,7 @@ addEventListener('keydown', e => {
     return;
   }
   if (typing || e.metaKey || e.ctrlKey || e.altKey || tab !== 'tasks') return;
+  if (ansicht === 'tabelle' && aktiv) return;      // in der Tabelle tippt man in die Zelle
 
   if (e.key === '/')                       { e.preventDefault(); qIn.focus(); }
   else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); titleIn.focus(); }
