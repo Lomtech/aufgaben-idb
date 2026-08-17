@@ -2179,8 +2179,9 @@ openDB().then(async handle => {
     letztesDia = localStorage.getItem('lastDia');
     reiter = localStorage.getItem('tab') || 'tasks';
     neuProj = localStorage.getItem('neuProj') || '';
+    breiten = JSON.parse(localStorage.getItem('spaltenbreiten') || '{}');
     const s = localStorage.getItem('sort');
-    if (SORTEN[s]) { sort = s; $('#sort').value = s; render(); }
+    if (SORTEN[s]) { sort = s; $('#sort').value = s; }
   } catch { /* egal */ }
 
   const start = docs.find(d => d.id === letztes) || [...docs].sort((a, b) => b.updated - a.updated)[0];
